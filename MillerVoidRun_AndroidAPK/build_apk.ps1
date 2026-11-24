@@ -1,4 +1,4 @@
-# MILLER: VOID RUN — Deterministic Offline Android APK Compiler & Signer
+﻿# MILLER: VOID RUN — Deterministic Offline Android APK Compiler & Signer
 # Compiles MillerVoidRun_Playable/www + MainActivity.java into ..\MillerVoidRun.apk
 
 $ErrorActionPreference = 'Stop'

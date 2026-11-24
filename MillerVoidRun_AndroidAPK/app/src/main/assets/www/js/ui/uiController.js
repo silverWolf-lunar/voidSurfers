@@ -37,6 +37,8 @@ class UIController {
     this.currentScreen = 'splash';
     this.selectedCharIdx = Math.max(0, CHARACTERS.findIndex((c) => c.id === saveManager.data.selectedChar));
     this.activeCustTab = 'runners';
+    this.csViewMode = 'front';
+    this.csRunPreviewIv = null;
     this.lastRunSummary = null;
     this.lastRunRecord = null;
     this.clipReplayIv = null;
@@ -105,6 +107,7 @@ class UIController {
     this.currentScreen = screenName;
 
     this.refreshStatusBars();
+    if (screenName !== 'charselect') this.stopCharSelectPreview();
 
     if (screenName === 'menu') {
       this.engine.showMenuMode();
@@ -112,6 +115,9 @@ class UIController {
       audioEngine.startMenuAmbience();
       if (this.pendingChallenge) this.openChallengePrompt(this.pendingChallenge);
       this.checkHealthyPlayReminder();
+    } else if (screenName === 'charselect') {
+      this.selectedCharIdx = Math.max(0, CHARACTERS.findIndex((c) => c.id === saveManager.data.selectedChar));
+      this.renderCharSelect();
     } else if (screenName === 'loadout') {
       this.renderLoadout();
     } else if (screenName === 'customise') {
@@ -153,7 +159,19 @@ class UIController {
     // Main Menu
     $('btn-mute-quick').addEventListener('click', () => this.toggleMute());
     $('btn-play').addEventListener('click', () => { audioEngine.playUiClick(); this.goTo('loadout'); });
+    $('btn-char-select').addEventListener('click', () => { audioEngine.playUiClick(); this.goTo('charselect'); });
+    $('menu-hero-avatar').addEventListener('click', () => { audioEngine.playUiClick(); this.goTo('charselect'); });
+    $('btn-loadout-switch-hero').addEventListener('click', () => { audioEngine.playUiClick(); this.goTo('charselect'); });
     $('btn-daily').addEventListener('click', () => { audioEngine.playUiClick(); this.launchDailyChallenge(); });
+
+    // Character Select View Toggle Buttons
+    document.querySelectorAll('[data-cs-view]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        audioEngine.playUiClick();
+        this.csViewMode = btn.dataset.csView;
+        this.renderCharSelect();
+      });
+    });
     $('nav-customise').addEventListener('click', () => { audioEngine.playUiClick(); this.goTo('customise'); });
     $('nav-codex').addEventListener('click', () => { audioEngine.playUiClick(); this.goTo('codex'); });
     $('nav-missions').addEventListener('click', () => { audioEngine.playUiClick(); this.goTo('missions'); });
@@ -305,6 +323,7 @@ class UIController {
     $('menu-best-dist').textContent = `🏃 ${d.bestDistance.toLocaleString()} m`;
     $('ach-count-mini').textContent = `${d.unlockedAchievements.length}/${ACHIEVEMENTS.length}`;
     if ($('cust-vs-pill')) $('cust-vs-pill').textContent = `${d.vs.toLocaleString()} 🔮`;
+    if ($('cs-vs-pill')) $('cs-vs-pill').textContent = `${d.vs.toLocaleString()} 🔮`;
 
     // Sync active runner portrait across Menu, Loadout & HUD
     const curChar = CHARACTERS.find((c) => c.id === d.selectedChar) || CHARACTERS[0];
@@ -313,6 +332,7 @@ class UIController {
       const img = $(id);
       if (img) img.src = portraitSrc;
     });
+    if ($('hud-callsign')) $('hud-callsign').textContent = curChar.name.split(' ')[0].toUpperCase();
   }
 
   renderMenuBadges() {
@@ -359,6 +379,158 @@ class UIController {
     setTimeout(() => el.remove(), 1100);
   }
 
+  // --- DEDICATED CHARACTER SELECT SCREEN ---
+  stopCharSelectPreview() {
+    if (this.csRunPreviewIv) {
+      clearInterval(this.csRunPreviewIv);
+      this.csRunPreviewIv = null;
+    }
+  }
+
+  renderCharSelect() {
+    const d = saveManager.data;
+    const c = CHARACTERS[this.selectedCharIdx] || CHARACTERS[0];
+    const unlocked = d.unlockedChars.includes(c.id);
+    const equipped = d.selectedChar === c.id;
+
+    // Keep live 3D runner synced in background too
+    this.engine.refreshMenuCharacter(c.id, d.selectedSkin);
+
+    // Update splash art backdrop (falls back to key art for unlockable GDD allies)
+    const bgImg = $('cs-bg-splash');
+    bgImg.src = c.splash || 'assets/art/key_art_poster.jpg';
+
+    // Update full-body sprite stage with actual source Front/Side/Back transparent cutouts!
+    this.stopCharSelectPreview();
+    const spriteImg = $('cs-sprite-img');
+    const fallbackEl = $('cs-stage-fallback');
+    const viewBar = document.querySelector('.cs-view-bar');
+    document.querySelectorAll('[data-cs-view]').forEach((b) => b.classList.toggle('active', b.dataset.csView === this.csViewMode));
+
+    if (c.sprites) {
+      spriteImg.classList.remove('hidden');
+      fallbackEl.classList.add('hidden');
+      if (viewBar) viewBar.style.display = 'flex';
+      spriteImg.classList.remove('anim-breathe', 'anim-run');
+
+      if (this.csViewMode === 'run') {
+        // Animated run-cycle preview using the hero's real Back & Side gameplay cutouts!
+        const frames = [c.sprites.back, c.sprites.side, c.sprites.back, c.sprites.side];
+        let step = 0;
+        spriteImg.src = frames[0];
+        spriteImg.style.transform = '';
+        spriteImg.classList.add('anim-run');
+        this.csRunPreviewIv = setInterval(() => {
+          step = (step + 1) % frames.length;
+          spriteImg.src = frames[step];
+        }, 420);
+      } else {
+        spriteImg.src = c.sprites[this.csViewMode] || c.sprites.front;
+        spriteImg.classList.add('anim-breathe');
+      }
+    } else {
+      spriteImg.classList.add('hidden');
+      fallbackEl.classList.remove('hidden');
+      fallbackEl.textContent = c.initials;
+      if (viewBar) viewBar.style.display = 'none';
+    }
+
+    const splashBtn = $('cs-btn-splash');
+    if (splashBtn) {
+      splashBtn.style.display = c.splash ? 'inline-block' : 'none';
+      splashBtn.onclick = () => this.openArtModal(`${c.name} — Hero Splash`, c.splash);
+    }
+
+    // Hero Level, smooth XP progress & combat stats
+    const hSt = saveManager.getHeroState(c.id);
+    const hReq = heroXpForNextLevel(hSt.level);
+    const hPct = Math.min(100, Math.round((hSt.xp / hReq) * 100));
+    const hBon = getHeroLevelBonuses(hSt.level);
+
+    $('cs-name').textContent = c.name;
+    $('cs-badge').classList.toggle('hidden', !c.featured);
+    $('cs-title').textContent = c.title;
+    $('cs-hero-lv').textContent = `Hero Lv ${hSt.level} (${hSt.xp}/${hReq} XP)`;
+    $('cs-hero-rank').textContent = hBon.rank;
+    $('cs-hero-xp-bar').style.width = `${hPct}%`;
+    $('cs-bonuses').innerHTML = `Bonuses: <strong>+${Math.round((hBon.rangeMult - 1) * 100)}% Strike</strong> · <strong>+${Math.round(hBon.slowResist * 100)}% Slow Resist</strong> · <strong>+${hBon.bonusMaxVE} VE</strong>`;
+    $('cs-passive').innerHTML = `<strong>Passive:</strong> ${c.passiveName} — ${c.passiveDesc}`;
+    $('cs-sig').innerHTML = `<strong>Signature:</strong> ${c.sigName} — ${c.sigDesc}`;
+
+    // Visual Portrait Roster Cards
+    const roster = $('cs-roster');
+    roster.innerHTML = '';
+    CHARACTERS.forEach((ch, idx) => {
+      const isUnlocked = d.unlockedChars.includes(ch.id);
+      const isEquipped = d.selectedChar === ch.id;
+      const isSelected = idx === this.selectedCharIdx;
+      const card = document.createElement('button');
+      card.className = `cs-card ${isSelected ? 'selected' : ''} ${isEquipped ? 'equipped' : ''} ${!isUnlocked ? 'locked' : ''}`;
+      const thumb = ch.portrait
+        ? `<img class="cs-card-thumb" src="${ch.portrait}" alt="${ch.name}" />`
+        : `<div class="cs-card-init">${ch.initials}</div>`;
+      const firstName = ch.name.split(' ')[0];
+      card.innerHTML = `${thumb}<div class="cs-card-label">${isUnlocked ? firstName : `🔒 ${firstName}`}</div>`;
+      card.onclick = () => {
+        audioEngine.playUiClick();
+        this.selectedCharIdx = idx;
+        this.renderCharSelect();
+      };
+      roster.appendChild(card);
+    });
+
+    // Equip / Unlock + Instant Play CTA
+    const equipBtn = $('cs-btn-equip');
+    const playBtn = $('cs-btn-play');
+    if (equipped) {
+      equipBtn.className = 'btn btn-sm';
+      equipBtn.textContent = '✅ EQUIPPED';
+      equipBtn.onclick = () => this.showToast(`${c.name} is ready to run!`);
+      playBtn.className = 'btn btn-primary btn-sm';
+      playBtn.textContent = `▶ PLAY ${c.name.split(' ')[0].toUpperCase()}`;
+      playBtn.onclick = () => {
+        audioEngine.playUiClick();
+        this.startStandardRun({ worldId: saveManager.data.selectedWorld });
+      };
+    } else if (unlocked) {
+      equipBtn.className = 'btn btn-gold btn-sm';
+      equipBtn.textContent = '✓ SELECT RUNNER';
+      equipBtn.onclick = () => {
+        d.selectedChar = c.id;
+        saveManager.save();
+        audioEngine.playEssence();
+        this.refreshStatusBars();
+        this.renderCharSelect();
+        this.showToast(`👤 Equipped ${c.name}!`);
+      };
+      playBtn.className = 'btn btn-primary btn-sm';
+      playBtn.textContent = `▶ PLAY ${c.name.split(' ')[0].toUpperCase()}`;
+      playBtn.onclick = () => {
+        d.selectedChar = c.id;
+        saveManager.save();
+        audioEngine.playUiClick();
+        this.refreshStatusBars();
+        this.startStandardRun({ worldId: saveManager.data.selectedWorld });
+      };
+    } else {
+      equipBtn.className = 'btn btn-gold btn-sm';
+      equipBtn.textContent = `🔓 ${c.costVS.toLocaleString()} VS${c.costBC ? ` + ${c.costBC} BC` : ''}`;
+      equipBtn.onclick = () => {
+        if (saveManager.unlockCharacter(c.id)) {
+          audioEngine.playAchievement();
+          this.refreshStatusBars();
+          this.renderCharSelect();
+          this.showToast(`🎉 Unlocked & Equipped ${c.name}!`);
+        } else {
+          this.showToast(`Requires Codex Lv ${c.reqLv}, ${c.costVS} VS${c.costBC ? ` & ${c.costBC} BC` : ''}`);
+        }
+      };
+      playBtn.className = 'btn btn-sm';
+      playBtn.textContent = `🔒 Lv ${c.reqLv}`;
+      playBtn.onclick = () => this.showToast(`Unlock ${c.name} first!`);
+    }
+  }
+
   // --- LOADOUT ---
   renderLoadout() {
     const d = saveManager.data;
@@ -382,7 +554,8 @@ class UIController {
       btn.style.cursor = unlocked ? 'pointer' : 'not-allowed';
       btn.style.opacity = unlocked ? '1' : '0.5';
       btn.innerHTML = `
-        <div>
+        <img class="world-thumb" src="${w.environArt || 'assets/art/environ/environ_emerald_ruins.jpg'}" alt="${w.name}" />
+        <div style="flex:1">
           <strong style="color:${w.accentHex}">W${w.id}: ${w.name}</strong>
           <div style="font-size:11px;opacity:.85">${w.portalType} · ${w.mechanicName}</div>
         </div>
@@ -479,19 +652,45 @@ class UIController {
     this.startStandardRun({ isDaily: true, seed: getDailySeedNumber() });
   }
 
-  // --- RUN HUD ---
+  // --- RUN HUD (Tactical Holographic Telemetry) ---
   updateHud(s) {
     $('hud-score').textContent = s.score.toLocaleString();
     $('hud-mult').textContent = `×${s.multiplier}`;
     $('hud-dist').textContent = `${s.distance.toLocaleString()} m`;
-    $('hud-world').textContent = `W${s.worldId} ${s.worldName}`;
+    $('hud-world').textContent = `WORLD 0${s.worldId}`;
     $('hud-world-prog').style.width = `${s.worldProg}%`;
+    if ($('hud-gate-pct')) $('hud-gate-pct').textContent = `${s.worldProg}%`;
+    if ($('hud-objective')) {
+      $('hud-objective').textContent = s.bossActive
+        ? `OBJECTIVE: ESCAPE BOSS · ${s.worldName.toUpperCase()}`
+        : `OBJECTIVE: REACH THE GATE · ${s.worldName.toUpperCase()}`;
+    }
+
+    // Top-Left Run Timer (MM:SS) & Angled SHIELD Plasma Gauge
+    if ($('hud-timer')) {
+      const sec = Math.max(0, Math.floor(s.elapsedSec || 0));
+      const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+      const ss = String(sec % 60).padStart(2, '0');
+      $('hud-timer').textContent = `${mm}:${ss}`;
+    }
+    const sh = s.totalShields || 0;
+    const shMax = s.maxShields || 2;
+    if ($('hud-shield-val')) $('hud-shield-val').textContent = sh > 0 ? `×${sh}` : '0';
+    if ($('hud-shield-fill')) $('hud-shield-fill').style.width = `${Math.min(100, Math.round((sh / shMax) * 100))}%`;
+
     $('hud-vs').textContent = `${s.vs} 🔮`;
     $('hud-ce').textContent = `${s.ce} ✦`;
     $('hud-kills').textContent = `${s.enemiesDefeated || 0} ⚔️`;
     $('hud-bc').textContent = `${s.bc} 🟡`;
 
-    // Gear Strike button state
+    // Segmented charge cells reflect Void Energy charge
+    const cells = $('hud-charge-cells')?.children;
+    if (cells) {
+      const lit = Math.round((s.ve / s.maxVE) * cells.length);
+      for (let i = 0; i < cells.length; i++) cells[i].classList.toggle('on', i < lit);
+    }
+
+    // Gear Strike orb state
     const sb = $('btn-gear-strike');
     if (sb && s.weapon) {
       const cd = s.weaponCd || 0;
@@ -502,12 +701,11 @@ class UIController {
     }
     $('fx-enemy-slow')?.classList.toggle('on', !!s.enemySlowed);
 
+    // Top-Right Angled COMBO Plate
     const comboEl = $('hud-combo');
-    if (s.combo > 1) {
-      comboEl.textContent = `🔥 NEAR ×${s.combo}`;
-      comboEl.classList.remove('hidden');
-    } else {
-      comboEl.classList.add('hidden');
+    if (comboEl) {
+      const cVal = Math.max(s.multiplier, s.combo || 1);
+      comboEl.textContent = `×${cVal}`;
     }
 
     // Active Power-Up Countdown Pills
@@ -520,11 +718,10 @@ class UIController {
         .join('');
     }
 
+    // Left-Edge Vertical ENERGY Plasma Column
     const vePct = Math.max(0, Math.min(100, (s.ve / s.maxVE) * 100));
-    $('hud-ve-fill').style.width = `${vePct}%`;
-    $('hud-ve-label').textContent = s.infested
-      ? '☠️ INFESTED — CAST POWER TO CLEANSE!'
-      : `VOID ENERGY ${Math.floor(s.ve)} / ${s.maxVE}`;
+    $('hud-ve-fill').style.height = `${vePct}%`;
+    $('hud-ve-label').textContent = s.infested ? '☠️' : `${Math.floor(s.ve)}`;
 
     const vb = $('btn-void-power');
     if (s.power) {
@@ -536,9 +733,29 @@ class UIController {
     }
     $('btn-void-ult').classList.toggle('hidden', !s.hasUltimate);
 
+    // Live 45° Diamond Tactical Threat Radar & Chaser Bar
     const threatPct = Math.max(5, Math.min(100, ((s.chaserMax - s.chaserDist) / s.chaserMax) * 100));
-    const stateLabel = s.chaserDist > 38 ? 'Distant' : s.chaserDist > 20 ? 'Approaching' : s.chaserDist > 8 ? 'CLOSE!' : 'CATCHING!!';
-    $('hud-chaser-text').textContent = `${s.chaserName}: ${stateLabel} (${Math.round(s.chaserDist)}m)`;
+    const laneLeftPct = s.lane === 0 ? 32 : s.lane === 2 ? 68 : 50;
+    if ($('radar-player-blip')) $('radar-player-blip').style.left = `${laneLeftPct}%`;
+    if ($('radar-chaser-blip')) {
+      const chTop = 90 - (threatPct / 100) * 30;
+      $('radar-chaser-blip').style.top = `${chTop}%`;
+      $('radar-chaser-blip').style.left = `${laneLeftPct}%`;
+    }
+    const eBlip = $('radar-enemy-blip');
+    if (eBlip) {
+      if (s.nearestEnemyZ !== null && s.nearestEnemyZ !== undefined) {
+        eBlip.classList.remove('hidden');
+        eBlip.style.left = `${s.nearestEnemyLane === 0 ? 32 : s.nearestEnemyLane === 2 ? 68 : 50}%`;
+        const eTop = Math.max(14, Math.min(50, 50 + (s.nearestEnemyZ / 45) * 36));
+        eBlip.style.top = `${eTop}%`;
+      } else {
+        eBlip.classList.add('hidden');
+      }
+    }
+
+    const warnPrefix = s.chaserDist < 20 ? '⚠ DANGER · ' : '⚠ ';
+    $('hud-chaser-text').textContent = `${warnPrefix}${s.chaserName.toUpperCase()} · ${Math.round(s.chaserDist)}M`;
     $('hud-chaser-fill').style.width = `${threatPct}%`;
 
     const rm = saveManager.data.settings.reducedMotion;

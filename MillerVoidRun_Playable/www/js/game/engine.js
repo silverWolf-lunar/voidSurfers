@@ -22,6 +22,8 @@ import { NativeBridge } from '../config/servicesConfig.js';
 import {
   getWorldTrackTexture,
   createSkyDome,
+  createEnvironmentBackdrop,
+  createChunkScenery,
   createRunnerMesh,
   createChaserMesh,
   createBossMesh,
@@ -114,6 +116,9 @@ export class VoidRunEngine {
     this.skyDome = createSkyDome(THREE, WORLDS[0]);
     this.scene.add(this.skyDome);
 
+    this.environBackdrop = createEnvironmentBackdrop(THREE, WORLDS[0]);
+    this.scene.add(this.environBackdrop);
+
     this.menuGroup = new THREE.Group();
     this.scene.add(this.menuGroup);
 
@@ -203,8 +208,38 @@ export class VoidRunEngine {
     const cid = charId || saveManager.data.selectedChar;
     const sid = skinId || saveManager.data.selectedSkin;
     this.menuCharMesh = createRunnerMesh(this.THREE, cid, sid, false);
-    this.menuCharMesh.rotation.y = Math.PI;
+    this.menuTurnAngle = 0;
+    if (this.menuCharMesh.userData.isSpriteRig) {
+      // Face camera cleanly; menuTurnAngle drives Front -> Side -> Back -> Side turnaround!
+      this.menuCharMesh.rotation.y = 0;
+      this.updateMenuSpriteTurnaround(0);
+    } else {
+      this.menuCharMesh.rotation.y = Math.PI;
+    }
     this.menuGroup.add(this.menuCharMesh);
+  }
+
+  updateMenuSpriteTurnaround(angleRad) {
+    if (!this.menuCharMesh || !this.menuCharMesh.userData.isSpriteRig) return;
+    const ud = this.menuCharMesh.userData;
+    const a = ((angleRad % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    // 0: Front, PI/2: Side Right, PI: Back, 3*PI/2: Side Left
+    ud.frontPlane.visible = false;
+    ud.sidePlane.visible = false;
+    ud.backRunGroup.visible = false;
+    if (a < Math.PI * 0.25 || a >= Math.PI * 1.75) {
+      ud.frontPlane.visible = true;
+    } else if (a < Math.PI * 0.75) {
+      ud.sidePlane.visible = true;
+      ud.sidePlane.scale.x = -1;
+    } else if (a < Math.PI * 1.25) {
+      ud.backRunGroup.visible = true;
+      if (ud.backFullPlane) ud.backFullPlane.visible = true;
+      if (ud.skelGroup) ud.skelGroup.visible = false;
+    } else {
+      ud.sidePlane.visible = true;
+      ud.sidePlane.scale.x = 1;
+    }
   }
 
   showMenuMode() {
@@ -240,7 +275,13 @@ export class VoidRunEngine {
       (e) => {
         if (this.mode === 'menu' && this.touchStart && this.menuCharMesh) {
           const t = e.changedTouches[0];
-          this.menuCharMesh.rotation.y += (t.clientX - this.touchStart.x) * 0.015;
+          const dx = t.clientX - this.touchStart.x;
+          if (this.menuCharMesh.userData.isSpriteRig) {
+            this.menuTurnAngle = (this.menuTurnAngle || 0) + dx * 0.015;
+            this.updateMenuSpriteTurnaround(this.menuTurnAngle);
+          } else {
+            this.menuCharMesh.rotation.y += dx * 0.015;
+          }
           this.touchStart.x = t.clientX;
         }
       },
@@ -269,7 +310,13 @@ export class VoidRunEngine {
     });
     window.addEventListener('mousemove', (e) => {
       if (this.mode === 'menu' && mouseDown && this.menuCharMesh) {
-        this.menuCharMesh.rotation.y += (e.clientX - mouseDown.x) * 0.012;
+        const dx = e.clientX - mouseDown.x;
+        if (this.menuCharMesh.userData.isSpriteRig) {
+          this.menuTurnAngle = (this.menuTurnAngle || 0) + dx * 0.014;
+          this.updateMenuSpriteTurnaround(this.menuTurnAngle);
+        } else {
+          this.menuCharMesh.rotation.y += dx * 0.012;
+        }
         mouseDown.x = e.clientX;
       }
     });
@@ -620,10 +667,15 @@ export class VoidRunEngine {
       this.skyDome = createSkyDome(this.THREE, world);
       this.scene.add(this.skyDome);
     }
+    if (this.environBackdrop) {
+      this.scene.remove(this.environBackdrop);
+      this.environBackdrop = createEnvironmentBackdrop(this.THREE, world);
+      this.scene.add(this.environBackdrop);
+    }
     if (this.horizonPortal) {
       this.runGroup.remove(this.horizonPortal);
       this.horizonPortal = createPortalGateMesh(this.THREE, world.accent, 2.8);
-      this.horizonPortal.position.set(0, 2.0, -115);
+      this.horizonPortal.position.set(0, 2.2, -104);
       this.runGroup.add(this.horizonPortal);
     }
   }
@@ -672,39 +724,13 @@ export class VoidRunEngine {
       chunkGroup.add(rail);
     }
 
-    // Animated floating environmental scenery (crystalline spires + glowing overhead portal arch!)
-    const propMat = new THREE.MeshStandardMaterial({
-      color: world.groundColor,
-      emissive: world.accent,
-      emissiveIntensity: 0.42,
-      roughness: 0.45,
-    });
-    for (let s = -1; s <= 1; s += 2) {
-      for (let i = 0; i < 3; i++) {
-        const h = 2.6 + this.rng() * 5.8;
-        const prop = new THREE.Mesh(
-          world.id === 3 || world.id === 5 || i === 1
-            ? new THREE.OctahedronGeometry(0.95 + this.rng() * 0.55, 0)
-            : new THREE.BoxGeometry(1.05, h, 1.05),
-          propMat
-        );
-        prop.position.set(s * (3.2 + this.rng() * 2.5), h * 0.48, -(i * 10 + 4));
-        chunkGroup.add(prop);
-      }
-    }
-
-    // Glowing scenic archway framing every other chunk for awesome speed parallax!
-    if (Math.abs(Math.round(zStart / len)) % 2 === 0) {
-      const arch = new THREE.Mesh(
-        new THREE.TorusGeometry(3.2, 0.11, 6, 22, Math.PI),
-        new THREE.MeshBasicMaterial({ color: world.secondaryAccent || world.accent, transparent: true, opacity: 0.55 })
-      );
-      arch.position.set(0, 0.2, -len * 0.5);
-      chunkGroup.add(arch);
-    }
+    // Reference-accurate 3D biome architecture & animated floating environment props!
+    const chunkIdx = Math.abs(Math.round(zStart / len));
+    const scenery = createChunkScenery(THREE, world, chunkIdx, this.rng);
+    chunkGroup.add(scenery.group);
 
     this.runGroup.add(chunkGroup);
-    this.run.chunks.push({ group: chunkGroup, zStart, zEnd: zStart - len });
+    this.run.chunks.push({ group: chunkGroup, zStart, zEnd: zStart - len, floaters: scenery.floaters });
 
     if (!safeStart && !this.run.bossActive) {
       const worldDist = this.run.distance - this.run.worldStartDist;
@@ -1851,10 +1877,21 @@ export class VoidRunEngine {
 
     if (this.mode === 'menu') {
       if (this.menuCharMesh) {
-        this.menuCharMesh.rotation.y += rawDt * 0.45;
-        this.menuCharMesh.position.y = Math.sin(now * 0.003) * 0.06;
-        if (this.menuCharMesh.userData.scarf) {
-          this.menuCharMesh.userData.scarf.rotation.x = 0.35 + Math.sin(now * 0.005) * 0.14;
+        if (this.menuCharMesh.userData.isSpriteRig) {
+          this.menuTurnAngle = (this.menuTurnAngle || 0) + rawDt * 0.42;
+          this.updateMenuSpriteTurnaround(this.menuTurnAngle);
+          this.menuCharMesh.position.y = Math.sin(now * 0.0032) * 0.06;
+          this.menuCharMesh.userData.bodyPivot.scale.set(
+            1 + Math.sin(now * 0.0028) * 0.015,
+            1 + Math.cos(now * 0.0028) * 0.018,
+            1
+          );
+        } else {
+          this.menuCharMesh.rotation.y += rawDt * 0.45;
+          this.menuCharMesh.position.y = Math.sin(now * 0.003) * 0.06;
+          if (this.menuCharMesh.userData.scarf) {
+            this.menuCharMesh.userData.scarf.rotation.x = 0.35 + Math.sin(now * 0.005) * 0.14;
+          }
         }
       }
       if (this.menuRing) this.menuRing.rotation.z += rawDt * 0.85;
@@ -1976,35 +2013,196 @@ export class VoidRunEngine {
     r.squashX += (1 - r.squashX) * Math.min(1, rawDt * 14);
     r.squashY += (1 - r.squashY) * Math.min(1, rawDt * 14);
 
-    // Animate Player Mesh
+    // Animate Player Mesh (Supports both 2.5D Articulated Source-Image Rig & Procedural 3D Allies!)
     const pm = this.playerMesh;
     const ud = pm.userData;
     pm.position.set(r.x, r.y, 0);
-    const runCycle = now * 0.016 * (r.speed / 12);
-    if (r.slideTimer > 0) {
-      ud.bodyPivot.scale.set(1.12, 0.48, 1.08);
-      ud.bodyPivot.rotation.x = -0.38;
+    const runCycle = now * 0.017 * (r.speed / 12);
+    const phased = r.voidwalkTimer > 0 || r.voidDomainTimer > 0 || r.eclipseVeilTimer > 0;
+
+    if (ud.isSpriteRig) {
+      const bankDiff = r.targetX - r.x;
+      const isBanking = Math.abs(bankDiff) > 0.22;
+      const isStriking = r.weaponCd > r.gear.weapon.cd - 0.26;
+      const useSkel = !!ud.skeletalReady;
+
+      // Always keep our live 10-part articulated skeletal back rig active during gameplay!
+      ud.frontPlane.visible = false;
+      ud.sidePlane.visible = false;
+      ud.backRunGroup.visible = true;
+      ud.skelGroup.visible = useSkel;
+      ud.backFullPlane.visible = !useSkel;
+
+      // Kinetic holographic afterimages during lane dashes, strikes & speed bursts!
+      if ((isBanking || isStriking || r.surgeTimer > 0 || r.voidlightTimer > 0) && !saveManager.data.settings.reducedMotion) {
+        r.afterimageTick = (r.afterimageTick || 0) + rawDt;
+        if (r.afterimageTick >= 0.065) {
+          r.afterimageTick = 0;
+          const tex = isBanking ? ud.sidePlane.material.map : ud.backFullPlane.material.map;
+          const ghostMat = new THREE.MeshBasicMaterial({
+            map: tex,
+            color: isStriking ? 0x3dff7a : (r.trailData?.color || 0x00e5ff),
+            transparent: true,
+            opacity: 0.42,
+            alphaTest: 0.08,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+          });
+          const ghostPlane = new THREE.Mesh(new THREE.PlaneGeometry(2.05, 2.05), ghostMat);
+          ghostPlane.position.set(r.x, r.y + 1.02, 0.14);
+          if (isBanking) ghostPlane.scale.x = bankDiff > 0.05 ? -1 : 1;
+          this.runGroup.add(ghostPlane);
+          this.trailParticles.push({ mesh: ghostPlane, life: 0.2, maxLife: 0.2, isAfterimage: true });
+        }
+      }
+
+      if (useSkel) {
+        // === TRUE MULTI-JOINT RUNNING MOTION: TORSO, HEAD, ARMS/HANDS & 2-SEGMENT LEGS ===
+        const s = Math.sin(runCycle);
+        const c = Math.cos(runCycle);
+        const speedNorm = Math.max(0, Math.min(1, (r.speed - 11) / 14));
+
+        // Reset shared body scale & subtle 3D bank twist into lane changes
+        ud.bodyPivot.position.y = 0;
+        ud.bodyPivot.rotation.set(0, -bankDiff * 0.34, -bankDiff * 0.26);
+        ud.bodyPivot.scale.set(r.squashX, r.squashY, 1);
+
+        if (r.slideTimer > 0) {
+          // Low athletic power-slide: hips drop, torso leans back, arms flare out for balance, legs extend!
+          ud.hipsPivot.position.y = ud.hipBaseY * 0.46;
+          ud.hipsPivot.rotation.set(0, 0, -bankDiff * 0.16);
+          ud.torsoPivot.rotation.set(0.58, 0, 0);
+          ud.headPivot.rotation.set(-0.35, 0, 0);
+
+          ud.lShoulderPivot.rotation.set(-0.35, 0, 0.12);
+          ud.lElbowPivot.rotation.set(-0.45, 0, -0.15);
+          ud.rShoulderPivot.rotation.set(-0.35, 0, -0.12);
+          ud.rElbowPivot.rotation.set(-0.45, 0, 0.15);
+
+          ud.lHipPivot.position.y = 0;
+          ud.rHipPivot.position.y = 0;
+          ud.lHipPivot.rotation.set(-1.1, 0, 0.08);
+          ud.lKneePivot.rotation.set(0.25, 0, 0);
+          ud.lHipPivot.scale.y = 0.85;
+          ud.lKneePivot.scale.y = 0.85;
+          ud.rHipPivot.rotation.set(-0.55, 0, -0.12);
+          ud.rKneePivot.rotation.set(1.1, 0, 0);
+          ud.rHipPivot.scale.y = 0.85;
+          ud.rKneePivot.scale.y = 0.72;
+        } else if (r.isJumping) {
+          // Dynamic airborne vault: arms throw up/forward, front knee drives high, trailing leg kicks back!
+          ud.hipsPivot.position.y = ud.hipBaseY + 0.06;
+          ud.hipsPivot.rotation.set(0, 0.12, -bankDiff * 0.18);
+          ud.torsoPivot.rotation.set(-0.22, -0.14, 0);
+          ud.headPivot.rotation.set(0.14, 0.08, 0);
+
+          // Both arms drive up & forward cleanly
+          ud.lShoulderPivot.rotation.set(-1.05, 0, 0.34);
+          ud.lElbowPivot.rotation.set(-0.75, 0, -0.22);
+          ud.rShoulderPivot.rotation.set(-0.75, 0, -0.34);
+          ud.rElbowPivot.rotation.set(-0.85, 0, 0.22);
+
+          // Left knee tucked high, right leg trailing bent
+          ud.lHipPivot.position.y = 0.16;
+          ud.lHipPivot.rotation.set(-0.95, 0, 0.06);
+          ud.lHipPivot.scale.y = 0.88;
+          ud.lKneePivot.rotation.set(1.15, 0, 0);
+          ud.lKneePivot.scale.y = 0.82;
+
+          ud.rHipPivot.position.y = 0.05;
+          ud.rHipPivot.rotation.set(0.42, 0, -0.06);
+          ud.rHipPivot.scale.y = 0.92;
+          ud.rKneePivot.rotation.set(0.75, 0, 0);
+          ud.rKneePivot.scale.y = 0.84;
+        } else {
+          // === FULL-SPEED ATHLETIC SPRINT CYCLE ===
+          // 1. Hips: rhythmic stride bounce, pelvic sway & hip counter-rotation
+          ud.hipsPivot.position.y = ud.hipBaseY + Math.abs(c) * (0.12 + speedNorm * 0.05);
+          ud.hipsPivot.rotation.set(0, -s * 0.15, s * 0.065);
+
+          // 2. Torso: forward sprint lean + unmistakable shoulder counter-twist opposite to hips!
+          const leanX = r.stumbleTimer > 0 ? 0.24 : (-0.18 - speedNorm * 0.12);
+          const strikeTwist = isStriking ? -0.58 : 0;
+          ud.torsoPivot.rotation.set(leanX, s * 0.28 + strikeTwist, -s * 0.075);
+
+          // 3. Head: counter-stabilizes gaze forward with gentle stride nod
+          ud.headPivot.rotation.set(0.11 + Math.abs(c) * 0.045, -s * 0.14 - strikeTwist * 0.4, s * 0.03);
+
+          // 4. Arms & Hands: pull A-pose arms INWARD to athletic sides, bend elbows & pump opposite to legs!
+          // Left Arm drives forward when Right Leg drives forward (s < 0 => forward, s > 0 => back)
+          const lArmDrive = -s;
+          ud.lShoulderPivot.rotation.set(lArmDrive * 0.88, 0, 0.56 + Math.max(0, -lArmDrive) * 0.14);
+          ud.lShoulderPivot.position.z = -0.02 + lArmDrive * 0.10;
+          ud.lElbowPivot.rotation.set(-0.92 - Math.max(0, lArmDrive) * 0.52 + Math.max(0, -lArmDrive) * 0.28, 0, -0.18 - lArmDrive * 0.18);
+
+          // Right Arm pumps opposite to Left Arm — or whips forward during Gear Strike!
+          if (isStriking) {
+            ud.rShoulderPivot.rotation.set(-1.38, 0, -0.22);
+            ud.rShoulderPivot.position.z = -0.14;
+            ud.rElbowPivot.rotation.set(-0.32, 0, 0.32);
+          } else {
+            const rArmDrive = s;
+            ud.rShoulderPivot.rotation.set(rArmDrive * 0.88, 0, -0.56 - Math.max(0, -rArmDrive) * 0.14);
+            ud.rShoulderPivot.position.z = -0.02 + rArmDrive * 0.10;
+            ud.rElbowPivot.rotation.set(-0.92 - Math.max(0, rArmDrive) * 0.52 + Math.max(0, -rArmDrive) * 0.28, 0, 0.18 + rArmDrive * 0.18);
+          }
+
+          // 5. Left & Right 2-Joint Legs (Hip/Thigh + Knee/Shin/Boot stride & kick-back!)
+          const lFwd = Math.max(0, s);
+          const lBack = Math.max(0, -s);
+          ud.lHipPivot.position.y = lFwd * 0.15 + lBack * 0.07;
+          ud.lHipPivot.rotation.set(-s * 0.92, 0, 0.03);
+          ud.lHipPivot.scale.y = 1.0 - lBack * 0.15 - lFwd * 0.06;
+          ud.lKneePivot.rotation.set(0.18 + lBack * 1.18 + Math.max(0, c) * 0.35, 0, 0);
+          ud.lKneePivot.scale.y = 1.0 - lBack * 0.28;
+
+          const rFwd = Math.max(0, -s);
+          const rBack = Math.max(0, s);
+          ud.rHipPivot.position.y = rFwd * 0.15 + rBack * 0.07;
+          ud.rHipPivot.rotation.set(s * 0.92, 0, -0.03);
+          ud.rHipPivot.scale.y = 1.0 - rBack * 0.15 - rFwd * 0.06;
+          ud.rKneePivot.rotation.set(0.18 + rBack * 1.18 + Math.max(0, -c) * 0.35, 0, 0);
+          ud.rKneePivot.scale.y = 1.0 - rBack * 0.28;
+        }
+      } else {
+        // Brief fallback animation while sprite image loads (<2ms)
+        ud.bodyPivot.position.y = Math.abs(Math.cos(runCycle)) * 0.1;
+        ud.bodyPivot.scale.set(r.squashX, r.squashY, 1);
+      }
+
+      // Apply phased / slowed / strike visual tint across all skeletal sprite materials
+      for (const m of ud.spriteMats) {
+        m.opacity = phased ? 0.45 : 1.0;
+        if (r.stumbleTimer > 0) m.color.setHex(0xff7788);
+        else if (r.enemySlowTimer > 0) m.color.setHex(0xff99ee);
+        else if (isStriking) m.color.setHex(0xbefeff);
+        else m.color.set(ud.baseTint);
+      }
     } else {
-      ud.bodyPivot.scale.set(r.squashX, r.squashY, 1);
-      ud.bodyPivot.rotation.x = r.stumbleTimer > 0 ? 0.3 : 0.12;
-      ud.legL.rotation.x = r.isJumping ? 0.55 : Math.sin(runCycle) * 0.9;
-      ud.legR.rotation.x = r.isJumping ? -0.45 : -Math.sin(runCycle) * 0.9;
-      ud.armL.rotation.x = -Math.sin(runCycle) * 0.8;
-      ud.armR.rotation.x = Math.sin(runCycle) * 0.8;
+      if (r.slideTimer > 0) {
+        ud.bodyPivot.scale.set(1.12, 0.48, 1.08);
+        ud.bodyPivot.rotation.x = -0.38;
+      } else {
+        ud.bodyPivot.scale.set(r.squashX, r.squashY, 1);
+        ud.bodyPivot.rotation.x = r.stumbleTimer > 0 ? 0.3 : 0.12;
+        ud.legL.rotation.x = r.isJumping ? 0.55 : Math.sin(runCycle) * 0.9;
+        ud.legR.rotation.x = r.isJumping ? -0.45 : -Math.sin(runCycle) * 0.9;
+        ud.armL.rotation.x = -Math.sin(runCycle) * 0.8;
+        ud.armR.rotation.x = Math.sin(runCycle) * 0.8;
+      }
+      ud.bodyPivot.rotation.z = (r.x - r.targetX) * 0.32;
+      if (ud.scarf) ud.scarf.rotation.x = 0.45 + Math.sin(runCycle * 1.4) * 0.25;
+      ud.matBody.transparent = phased;
+      ud.matBody.opacity = phased ? 0.42 : 1.0;
     }
-    ud.bodyPivot.rotation.z = (r.x - r.targetX) * 0.32;
-    if (ud.scarf) ud.scarf.rotation.x = 0.45 + Math.sin(runCycle * 1.4) * 0.25;
+
     if (ud.footRing) {
       ud.footRing.position.y = -r.y + 0.04;
       const fScale = Math.max(0.55, 1 - r.y * 0.22);
       ud.footRing.scale.set(fScale, fScale, 1);
     }
 
-    // Power visuals on runner
-    const phased = r.voidwalkTimer > 0 || r.voidDomainTimer > 0 || r.eclipseVeilTimer > 0;
-    ud.matBody.transparent = phased;
-    ud.matBody.opacity = phased ? 0.42 : 1.0;
-    ud.shieldMesh.visible = r.shieldHits > 0 || r.barrierHits > 0 || r.chronalHavenTimer > 0 || r.voidlightTimer > 0;
+    ud.shieldMesh.visible = r.shieldHits > 0 || r.barrierHits > 0 || r.armorDeflects > 0 || r.chronalHavenTimer > 0 || r.voidlightTimer > 0;
     ud.shieldMesh.rotation.y += rawDt * 2.8;
     ud.orbGroup.visible = saveManager.data.codexLevel >= 55 && r.voidResonanceTimer <= 0;
     ud.orbGroup.rotation.y += rawDt * 3.4;
@@ -2029,19 +2227,35 @@ export class VoidRunEngine {
       tp.life -= rawDt;
       tp.mesh.position.z += r.speed * worldDt * 0.85;
       const s = Math.max(0.05, tp.life / tp.maxLife);
-      tp.mesh.scale.set(s, s, s);
-      tp.mesh.material.opacity = s * 0.85;
+      if (tp.isAfterimage) {
+        tp.mesh.material.opacity = s * 0.42;
+      } else {
+        tp.mesh.scale.set(s, s, s);
+        tp.mesh.material.opacity = s * 0.85;
+      }
       if (tp.life <= 0) {
         this.runGroup.remove(tp.mesh);
+        if (tp.isAfterimage) tp.mesh.geometry.dispose();
         tp.mesh.material.dispose();
         this.trailParticles.splice(i, 1);
       }
     }
 
-    // Horizon portal swirl
+    // Horizon portal swirl + subtle parallax sway on illustrated environment backdrop & floating rocks!
     if (this.horizonPortal) {
       this.horizonPortal.userData.ring.rotation.z -= rawDt * 0.8;
       this.horizonPortal.userData.innerRing.rotation.z += rawDt * 1.4;
+    }
+    if (this.environBackdrop) {
+      const targetRotY = -r.x * 0.032;
+      this.environBackdrop.rotation.y += (targetRotY - this.environBackdrop.rotation.y) * Math.min(1, rawDt * 4);
+    }
+    for (const ch of r.chunks) {
+      if (!ch.floaters) continue;
+      for (const fl of ch.floaters) {
+        fl.mesh.position.y = fl.baseY + Math.sin(now * 0.0022 + fl.phase) * fl.amp;
+        fl.mesh.rotation.y += rawDt * 0.45;
+      }
     }
 
     // Void Sense path ribbon
@@ -2292,11 +2506,24 @@ export class VoidRunEngine {
 
     const activeInfo = this.getEquippedPowerInfo();
     const worldProg = Math.min(100, Math.round((worldDist / TRACK_CONFIG.bossTriggerDist) * 100));
+    const totalShields = r.shieldHits + r.barrierHits + r.armorDeflects;
+    const maxShields = Math.max(2, (r.charId === 'brann' ? 1 : 0) + (r.gear.armor.deflectCharges || 0) + 1);
+    let nearestEnemy = null;
+    for (const pe of r.portalEnemies) {
+      if (!pe.defeated && pe.z < 2 && (!nearestEnemy || pe.z > nearestEnemy.z)) nearestEnemy = pe;
+    }
 
     this.cb.onHudUpdate?.({
       score: Math.floor(r.score),
       multiplier: r.multiplier,
       distance: Math.floor(r.distance),
+      elapsedSec: r.elapsed,
+      lane: r.lane,
+      totalShields,
+      maxShields,
+      nearestEnemyZ: nearestEnemy ? nearestEnemy.z : null,
+      nearestEnemyLane: nearestEnemy ? nearestEnemy.lane : 1,
+      bossActive: r.bossActive,
       worldProg,
       vs: r.vs,
       ce: r.ce,

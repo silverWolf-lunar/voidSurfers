@@ -69,9 +69,12 @@ function createDefaultSave() {
     totalEnemiesDefeated: 0,
     totalPlaySeconds: 0,
     selectedChar: 'miller',
-    unlockedChars: ['miller'],
+    unlockedChars: ['miller', 'brann', 'elara', 'nyx'],
     heroProgress: {
       miller: { level: 1, xp: 0 },
+      brann: { level: 1, xp: 0 },
+      elara: { level: 1, xp: 0 },
+      nyx: { level: 1, xp: 0 },
     },
     equippedWeapon: 'steel_blade',
     equippedArmor: 'hunter_coat',
@@ -171,9 +174,11 @@ class SaveManager {
       const raw = localStorage.getItem(SAVE_KEY);
       if (!raw) return def;
       const parsed = JSON.parse(raw);
+      const mergedChars = Array.from(new Set([...(parsed.unlockedChars || []), 'miller', 'brann', 'elara', 'nyx']));
       return {
         ...def,
         ...parsed,
+        unlockedChars: mergedChars,
         settings: { ...def.settings, ...(parsed.settings || {}) },
         consumableStock: { ...def.consumableStock, ...(parsed.consumableStock || {}) },
         abilityTiers: { ...def.abilityTiers, ...(parsed.abilityTiers || {}) },
