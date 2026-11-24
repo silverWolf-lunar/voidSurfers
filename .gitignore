@@ -1,0 +1,30 @@
+# Portable local Android/JDK toolchain (auto-downloaded via download_tools.ps1)
+_buildtools/
+
+# Android intermediate build artifacts & local debug keystore
+MillerVoidRun_AndroidAPK/build/
+MillerVoidRun_AndroidAPK/*.jks
+MillerVoidRun_AndroidAPK/*.keystore
+
+# Unity generated folders
+MillerVoidRun_Unity/[Ll]ibrary/
+MillerVoidRun_Unity/[Tt]emp/
+MillerVoidRun_Unity/[Oo]bj/
+MillerVoidRun_Unity/[Bb]uild/
+MillerVoidRun_Unity/[Bb]uilds/
+MillerVoidRun_Unity/[Ll]ogs/
+MillerVoidRun_Unity/[Uu]ser[Ss]ettings/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.pidb
+*.booproj
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
