@@ -385,6 +385,8 @@ class UIController {
       clearInterval(this.csRunPreviewIv);
       this.csRunPreviewIv = null;
     }
+    $('screen-charselect')?.classList.remove('cs-live-3d');
+    this.engine?.setMenuPreviewMotion('idle');
   }
 
   renderCharSelect() {
@@ -400,31 +402,28 @@ class UIController {
     const bgImg = $('cs-bg-splash');
     bgImg.src = c.splash || 'assets/art/key_art_poster.jpg';
 
-    // Update full-body sprite stage with actual source Front/Side/Back transparent cutouts!
+    // Update full-body sprite stage: Front/Side/Back show crisp 2D cutouts; Run & Atk run the LIVE 3D 10-part skeletal rig!
     this.stopCharSelectPreview();
+    const csScreen = $('screen-charselect');
     const spriteImg = $('cs-sprite-img');
     const fallbackEl = $('cs-stage-fallback');
     const viewBar = document.querySelector('.cs-view-bar');
     document.querySelectorAll('[data-cs-view]').forEach((b) => b.classList.toggle('active', b.dataset.csView === this.csViewMode));
 
     if (c.sprites) {
-      spriteImg.classList.remove('hidden');
       fallbackEl.classList.add('hidden');
       if (viewBar) viewBar.style.display = 'flex';
-      spriteImg.classList.remove('anim-breathe', 'anim-run');
+      spriteImg.classList.remove('anim-breathe', 'anim-run', 'anim-attack');
 
-      if (this.csViewMode === 'run') {
-        // Animated run-cycle preview using the hero's real Back & Side gameplay cutouts!
-        const frames = [c.sprites.back, c.sprites.side, c.sprites.back, c.sprites.side];
-        let step = 0;
-        spriteImg.src = frames[0];
-        spriteImg.style.transform = '';
-        spriteImg.classList.add('anim-run');
-        this.csRunPreviewIv = setInterval(() => {
-          step = (step + 1) % frames.length;
-          spriteImg.src = frames[step];
-        }, 420);
+      if (this.csViewMode === 'run' || this.csViewMode === 'attack') {
+        // Reveal the REAL LIVE 3D skeletal runner sprinting or attacking right on the Character Select stage!
+        spriteImg.classList.add('hidden');
+        csScreen.classList.add('cs-live-3d');
+        this.engine.setMenuPreviewMotion(this.csViewMode, c.id);
       } else {
+        spriteImg.classList.remove('hidden');
+        csScreen.classList.remove('cs-live-3d');
+        this.engine.setMenuPreviewMotion('idle', c.id);
         spriteImg.src = c.sprites[this.csViewMode] || c.sprites.front;
         spriteImg.classList.add('anim-breathe');
       }

@@ -1349,6 +1349,16 @@ body.colorblind .pill-green::before { content: "● "; }
   overflow: hidden;
   background: var(--void-black);
 }
+#screen-charselect.cs-live-3d {
+  background: transparent;
+}
+#screen-charselect.cs-live-3d .cs-bg-splash,
+#screen-charselect.cs-live-3d .cs-stage-aura {
+  opacity: 0;
+}
+#screen-charselect.cs-live-3d .cs-bg-scrim {
+  background: linear-gradient(180deg, rgba(6, 12, 26, 0.72) 0%, transparent 18%, transparent 56%, rgba(6, 12, 26, 0.92) 78%, rgba(6, 11, 22, 0.98) 100%);
+}
 .cs-bg-splash {
   position: absolute;
   inset: 0;
@@ -1411,6 +1421,15 @@ body.colorblind .pill-green::before { content: "● "; }
 }
 .cs-sprite-img.anim-run {
   animation: csRunStride 0.42s ease-in-out infinite;
+}
+.cs-sprite-img.anim-attack {
+  animation: csAttackSlash 0.58s cubic-bezier(0.2, 0.9, 0.3, 1) infinite;
+}
+@keyframes csAttackSlash {
+  0% { transform: translateX(-14px) rotate(-10deg) scale(0.96); filter: drop-shadow(0 0 12px rgba(76, 243, 255, 0.4)); }
+  28% { transform: translateX(22px) translateY(-10px) rotate(12deg) scale(1.1); filter: drop-shadow(0 0 28px #4cf3ff) drop-shadow(0 0 16px #b466ff); }
+  55% { transform: translateX(8px) rotate(4deg) scale(1.03); }
+  100% { transform: translateX(-14px) rotate(-10deg) scale(0.96); }
 }
 @keyframes csBreathe {
   0%, 100% { transform: translateY(0) scale(1); }

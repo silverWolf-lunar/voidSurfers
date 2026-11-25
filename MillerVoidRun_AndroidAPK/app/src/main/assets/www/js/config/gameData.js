@@ -519,15 +519,15 @@ export const AURA_FX = [
   { id: 'aurora', name: 'Aurora Prism', hex: '#44FF88', color: 0x44ff88, costVS: 1800, rainbow: true, desc: 'Multi-colour aurora confetti explosions.' },
 ];
 
-// === PORTAL-BASED CHARGING ENEMIES (Per Portal World) ===
+// === CANON PORTAL CREATURES FROM "MILLER: THE GOD OF VOID" (7 Beast Tiers) ===
 export const PORTAL_ENEMIES = {
-  1: { name: 'Bramble Stalker', color: 0x268a44, eyeColor: 0x3dff7a, speed: 6.5, slowPct: 0.34, slowDur: 2.0, weave: false, hp: 1 },
-  2: { name: 'Cinder Brute', color: 0xb83814, eyeColor: 0xffd84d, speed: 7.4, slowPct: 0.36, slowDur: 2.1, weave: false, hp: 1 },
-  3: { name: 'Mirage Wraith', color: 0x243da8, eyeColor: 0x00e5ff, speed: 8.0, slowPct: 0.38, slowDur: 2.2, weave: true, hp: 1 },
-  4: { name: 'Crimson Reaver', color: 0x9c1026, eyeColor: 0xff5566, speed: 8.6, slowPct: 0.4, slowDur: 2.3, weave: true, hp: 1 },
-  5: { name: 'Frost Sentinel', color: 0x1d7a9c, eyeColor: 0x5cf2ff, speed: 8.8, slowPct: 0.44, slowDur: 2.5, weave: true, hp: 1 },
-  6: { name: 'Abyssal Fiend', color: 0x4d0d6e, eyeColor: 0xff44c8, speed: 9.4, slowPct: 0.42, slowDur: 2.4, weave: true, hp: 1 },
-  7: { name: 'Dominion Striker', color: 0xd8d0f2, eyeColor: 0xffd84d, speed: 10.2, slowPct: 0.45, slowDur: 2.5, weave: true, hp: 1 },
+  1: { name: 'Thornhound Stalker', tier: 'Advanced Tier', creatureType: 'quadruped', color: 0x266e3c, secondaryColor: 0x163820, eyeColor: 0x3dff7a, speed: 6.5, slowPct: 0.34, slowDur: 2.0, weave: false, hp: 1 },
+  2: { name: 'Skeld Morph-Draker', tier: 'King Tier', creatureType: 'morph_brute', color: 0xb83814, secondaryColor: 0x3d140a, eyeColor: 0xffd84d, speed: 7.4, slowPct: 0.36, slowDur: 2.1, weave: false, hp: 1 },
+  3: { name: 'Dreadwhisper Chimera', tier: 'Emperor Tier', creatureType: 'arachnid', color: 0x1b234d, secondaryColor: 0x0b0f24, eyeColor: 0x00e5ff, speed: 8.0, slowPct: 0.38, slowDur: 2.2, weave: true, hp: 1 },
+  4: { name: 'Pyreclad Flame-Drake', tier: 'Legendary Tier', creatureType: 'drake', color: 0x9c1026, secondaryColor: 0x330710, eyeColor: 0xff8822, speed: 8.6, slowPct: 0.4, slowDur: 2.3, weave: true, hp: 1 },
+  5: { name: 'Chronal Ice-Wyrmling', tier: 'Demigod Tier', creatureType: 'wyrm', color: 0x1c79a6, secondaryColor: 0x0c3452, eyeColor: 0x5cf2ff, speed: 8.8, slowPct: 0.44, slowDur: 2.5, weave: true, hp: 1 },
+  6: { name: 'Voidstalker Fiend', tier: 'Demon Tier', creatureType: 'tendril_fiend', color: 0x450d66, secondaryColor: 0x150424, eyeColor: 0xff44c8, speed: 9.4, slowPct: 0.42, slowDur: 2.4, weave: true, hp: 1 },
+  7: { name: 'Abyssal Seraph-Stalker', tier: 'Yigyang Tier', creatureType: 'seraph', color: 0xe6e2ff, secondaryColor: 0x18142b, eyeColor: 0xffd84d, speed: 10.2, slowPct: 0.45, slowDur: 2.5, weave: true, hp: 1 },
 };
 
 // === UNLOCKABLE GEAR ARMORY (Weapons, Armor & Relics — 100% Skill-Earned) ===

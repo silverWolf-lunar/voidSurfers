@@ -50,7 +50,7 @@ function sliceSkeletalPartsFromImage(THREE, heroId, img) {
     const ctx = c.getContext('2d');
     ctx.save();
     drawMaskFn(ctx, S);
-    ctx.clip();
+    ctx.clip('nonzero');
     ctx.drawImage(img, 0, 0, S, S);
     ctx.restore();
     const tex = new THREE.CanvasTexture(c);
@@ -58,6 +58,10 @@ function sliceSkeletalPartsFromImage(THREE, heroId, img) {
     tex.magFilter = THREE.LinearFilter;
     tex.needsUpdate = true;
     return tex;
+  };
+  const addCircle = (ctx, cx, cy, r) => {
+    ctx.moveTo(cx + r, cy);
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
   };
 
   // Helper: interpolate piecewise cut line X at given normalized Y
@@ -79,7 +83,7 @@ function sliceSkeletalPartsFromImage(THREE, heroId, img) {
   const head = makePartTex((ctx, s) => {
     ctx.beginPath();
     ctx.rect(headX0 * s, 0, (headX1 - headX0) * s, (neckY + 0.028) * s);
-    ctx.arc(0.5 * s, neckY * s, 0.055 * s, 0, Math.PI * 2);
+    addCircle(ctx, 0.5 * s, neckY * s, 0.055 * s);
   });
 
   // 2. TORSO + BACK GEAR (excludes head box, outer left/right arms & lower legs, keeping belt sword & diagonal staff intact!)
@@ -131,8 +135,8 @@ function sliceSkeletalPartsFromImage(THREE, heroId, img) {
     ctx.lineTo((lElbow[0] - 0.05) * s, (lElbow[1] + 0.03) * s);
     ctx.lineTo(0, (lElbow[1] + 0.02) * s);
     ctx.closePath();
-    ctx.arc(lShoulder[0] * s, lShoulder[1] * s, rCap * s, 0, Math.PI * 2);
-    ctx.arc(lElbow[0] * s, lElbow[1] * s, rCap * s, 0, Math.PI * 2);
+    addCircle(ctx, lShoulder[0] * s, lShoulder[1] * s, rCap * s);
+    addCircle(ctx, lElbow[0] * s, lElbow[1] * s, rCap * s);
   });
 
   // 4. LEFT FOREARM + HAND (from elbow outward to fingertips)
@@ -143,7 +147,7 @@ function sliceSkeletalPartsFromImage(THREE, heroId, img) {
     ctx.lineTo((cutX(lCut, 0.54) - 0.005) * s, 0.54 * s);
     ctx.lineTo(0, 0.56 * s);
     ctx.closePath();
-    ctx.arc(lElbow[0] * s, lElbow[1] * s, rCap * s, 0, Math.PI * 2);
+    addCircle(ctx, lElbow[0] * s, lElbow[1] * s, rCap * s);
   });
 
   // 5. RIGHT UPPER ARM (between shoulder seam and elbow)
@@ -156,8 +160,8 @@ function sliceSkeletalPartsFromImage(THREE, heroId, img) {
     ctx.lineTo((rElbow[0] + 0.05) * s, (rElbow[1] + 0.03) * s);
     ctx.lineTo(s, (rElbow[1] + 0.02) * s);
     ctx.closePath();
-    ctx.arc(rShoulder[0] * s, rShoulder[1] * s, rCap * s, 0, Math.PI * 2);
-    ctx.arc(rElbow[0] * s, rElbow[1] * s, rCap * s, 0, Math.PI * 2);
+    addCircle(ctx, rShoulder[0] * s, rShoulder[1] * s, rCap * s);
+    addCircle(ctx, rElbow[0] * s, rElbow[1] * s, rCap * s);
   });
 
   // 6. RIGHT FOREARM + HAND (from elbow outward to fingertips)
@@ -168,7 +172,7 @@ function sliceSkeletalPartsFromImage(THREE, heroId, img) {
     ctx.lineTo((cutX(rCut, 0.54) + 0.005) * s, 0.54 * s);
     ctx.lineTo(s, 0.56 * s);
     ctx.closePath();
-    ctx.arc(rElbow[0] * s, rElbow[1] * s, rCap * s, 0, Math.PI * 2);
+    addCircle(ctx, rElbow[0] * s, rElbow[1] * s, rCap * s);
   });
 
   // 7. LEFT THIGH (hipY..kneeY, inside legMinX..midX, with overlap caps)
@@ -213,7 +217,6 @@ function getSkeletalParts(THREE, charData, onReady) {
   skeletalPartsCache.set(key, entry);
 
   const img = new Image();
-  img.crossOrigin = 'anonymous';
   img.onload = () => {
     entry.data = sliceSkeletalPartsFromImage(THREE, key, img);
     entry.ready = true;
@@ -221,6 +224,54 @@ function getSkeletalParts(THREE, charData, onReady) {
     entry.waiters = [];
   };
   img.src = charData.sprites.back;
+}
+
+function createHeroHandWeapon(THREE, heroId, accentHex, isOffhand = false) {
+  const g = new THREE.Group();
+  const steelMat = new THREE.MeshStandardMaterial({ color: 0xc8d4e8, roughness: 0.25, metalness: 0.85 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x1b1e2c, roughness: 0.5, metalness: 0.5 });
+  const glowMat = new THREE.MeshBasicMaterial({ color: accentHex });
+
+  if (heroId === 'brann') {
+    // Heavy Forged Warhammer with glowing molten ember core!
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 1.05, 7), darkMat);
+    shaft.position.y = 0.35;
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.26, 0.26), steelMat);
+    head.position.y = 0.86;
+    const core = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.1, 0.14), glowMat);
+    core.position.y = 0.86;
+    g.add(shaft, head, core);
+  } else if (heroId === 'elara') {
+    // Arcane Runic Compass Staff with glowing cyan-emerald crystal core!
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.032, 1.32, 7), darkMat);
+    shaft.position.y = 0.42;
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.028, 6, 16), steelMat);
+    ring.position.y = 1.12;
+    const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.11, 0), glowMat);
+    crystal.position.y = 1.12;
+    g.add(shaft, ring, crystal);
+  } else if (heroId === 'nyx') {
+    // Curved Twin Shadow Fang Dagger (dual-wielded!)
+    const hilt = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.2, 6), darkMat);
+    const blade = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.58, 4), steelMat);
+    blade.position.set(isOffhand ? -0.04 : 0.04, 0.36, 0);
+    blade.rotation.z = isOffhand ? 0.22 : -0.22;
+    const edge = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.62, 4), glowMat);
+    edge.position.set(isOffhand ? -0.055 : 0.055, 0.37, 0.01);
+    edge.rotation.z = isOffhand ? 0.24 : -0.24;
+    g.add(hilt, blade, edge);
+  } else {
+    // Miller Redwolf & Default: Blazing Umbral Void Longsword!
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.24, 6), darkMat);
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.045, 0.06), steelMat);
+    guard.position.y = 0.12;
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.92, 0.024), steelMat);
+    blade.position.y = 0.6;
+    const auraEdge = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.96, 0.014), glowMat);
+    auraEdge.position.y = 0.61;
+    g.add(grip, guard, blade, auraEdge);
+  }
+  return g;
 }
 
 function loadEnvironTexture(THREE, url) {
@@ -288,10 +339,18 @@ function createArticulatedImageRunnerRig(THREE, charData, skin, isGhost) {
 
   // Helper: convert normalized top-down image coords (px, py) to character-local (x, y)
   const toWorld = (px, py) => [(px - 0.5) * W, (1.0 - py) * H];
-  const makePartMesh = (mat, pivotPx, pivotPy, zOff = 0) => {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(W, H), mat);
-    m.position.set((0.5 - pivotPx) * W, (pivotPy - 0.5) * H, zOff);
-    return m;
+  // Volumetric 3-slice layered sprite part so limbs stay solid and NEVER turn paper-thin when swinging in 3D!
+  const makePartMesh = (mat, pivotPx, pivotPy, zOff = 0, thick = 0.036) => {
+    const grp = new THREE.Group();
+    const ox = (0.5 - pivotPx) * W;
+    const oy = (pivotPy - 0.5) * H;
+    const planeGeo = new THREE.PlaneGeometry(W, H);
+    for (const dz of [-thick, 0, thick]) {
+      const m = new THREE.Mesh(planeGeo, mat);
+      m.position.set(ox, oy, zOff + dz);
+      grp.add(m);
+    }
+    return grp;
   };
 
   // 1) FULL 10-PART ARTICULATED SKELETAL BACK-VIEW RUNNER RIG (Torso, Head, Left/Right UpperArm+Forearm/Hand, Left/Right Thigh+Knee/Boot!)
@@ -350,54 +409,102 @@ function createArticulatedImageRunnerRig(THREE, charData, skin, isGhost) {
   const lElbowPivot = new THREE.Group();
   lElbowPivot.position.set((layout.lElbow[0] - layout.lShoulder[0]) * W, (layout.lShoulder[1] - layout.lElbow[1]) * H, -0.01);
   lShoulderPivot.add(lElbowPivot);
-  lElbowPivot.add(makePartMesh(partMats.leftForearm, layout.lElbow[0], layout.lElbow[1], 0));
+  lElbowPivot.add(makePartMesh(partMats.leftForearm, layout.lElbow[0], layout.lElbow[1], 0, 0.032));
+
+  // Optional Left-Hand Weapon (Dual-wield Twin Fang for Nyx Aderyn!)
+  const lHandMount = new THREE.Group();
+  lHandMount.position.set(-0.22, -0.24, -0.06);
+  lElbowPivot.add(lHandMount);
+  let lWeaponMesh = null;
+  if (charData.id === 'nyx') {
+    lWeaponMesh = createHeroHandWeapon(THREE, 'nyx', accent, true);
+    lWeaponMesh.rotation.set(-0.8, 0, 0.45);
+    lHandMount.add(lWeaponMesh);
+  }
 
   // RIGHT ARM: SHOULDER -> ELBOW/FOREARM/HAND (child of Torso)
   const rShoulderPivot = new THREE.Group();
   rShoulderPivot.position.set((layout.rShoulder[0] - 0.5) * W, (layout.hipY - layout.rShoulder[1]) * H, -0.02);
   torsoPivot.add(rShoulderPivot);
-  rShoulderPivot.add(makePartMesh(partMats.rightUpperArm, layout.rShoulder[0], layout.rShoulder[1], 0));
+  rShoulderPivot.add(makePartMesh(partMats.rightUpperArm, layout.rShoulder[0], layout.rShoulder[1], 0, 0.034));
 
   const rElbowPivot = new THREE.Group();
   rElbowPivot.position.set((layout.rElbow[0] - layout.rShoulder[0]) * W, (layout.rShoulder[1] - layout.rElbow[1]) * H, -0.01);
   rShoulderPivot.add(rElbowPivot);
-  rElbowPivot.add(makePartMesh(partMats.rightForearm, layout.rElbow[0], layout.rElbow[1], 0));
+  rElbowPivot.add(makePartMesh(partMats.rightForearm, layout.rElbow[0], layout.rElbow[1], 0, 0.032));
 
-  // LEFT LEG: HIP -> THIGH -> KNEE/SHIN/BOOT (child of Hips)
+  // Right-Hand Signature 3D Hero Weapon (Miller Void Sword, Brann Warhammer, Elara Staff, Nyx Fang!)
+  const rHandMount = new THREE.Group();
+  rHandMount.position.set(0.22, -0.24, -0.06);
+  rElbowPivot.add(rHandMount);
+  const rWeaponMesh = createHeroHandWeapon(THREE, charData.id, accent, false);
+  rWeaponMesh.rotation.set(-0.85, 0, -0.35);
+  rHandMount.add(rWeaponMesh);
+
+  // LEFT LEG: HIP -> THIGH -> KNEE/SHIN/3D BOOT SOLE (child of Hips)
+  const bootMat = new THREE.MeshStandardMaterial({ color: 0x261d1c, roughness: 0.75, metalness: 0.2 });
+  const soleGlowMat = new THREE.MeshBasicMaterial({ color: accent });
+  const makeBootSole = () => {
+    const bg = new THREE.Group();
+    const sole = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.09, 0.34), bootMat);
+    const heelRim = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.035, 0.28), soleGlowMat);
+    heelRim.position.y = -0.04;
+    bg.add(sole, heelRim);
+    return bg;
+  };
+
   const lHipPx = layout.midX - 0.055;
   const lHipPivot = new THREE.Group();
   lHipPivot.position.set((lHipPx - 0.5) * W, 0, -0.015);
   hipsPivot.add(lHipPivot);
-  lHipPivot.add(makePartMesh(partMats.leftThigh, lHipPx, layout.hipY, 0));
+  lHipPivot.add(makePartMesh(partMats.leftThigh, lHipPx, layout.hipY, 0, 0.04));
 
   const lKneePivot = new THREE.Group();
   lKneePivot.position.set(0, (layout.hipY - layout.kneeY) * H, 0.01);
   lHipPivot.add(lKneePivot);
-  lKneePivot.add(makePartMesh(partMats.leftShin, lHipPx, layout.kneeY, 0));
+  lKneePivot.add(makePartMesh(partMats.leftShin, lHipPx, layout.kneeY, 0, 0.04));
+  const lBootSole = makeBootSole();
+  lBootSole.position.set(0, -(1.0 - layout.kneeY - 0.04) * H, -0.04);
+  lKneePivot.add(lBootSole);
 
-  // RIGHT LEG: HIP -> THIGH -> KNEE/SHIN/BOOT (child of Hips)
+  // RIGHT LEG: HIP -> THIGH -> KNEE/SHIN/3D BOOT SOLE (child of Hips)
   const rHipPx = layout.midX + 0.055;
   const rHipPivot = new THREE.Group();
   rHipPivot.position.set((rHipPx - 0.5) * W, 0, -0.015);
   hipsPivot.add(rHipPivot);
-  rHipPivot.add(makePartMesh(partMats.rightThigh, rHipPx, layout.hipY, 0));
+  rHipPivot.add(makePartMesh(partMats.rightThigh, rHipPx, layout.hipY, 0, 0.04));
 
   const rKneePivot = new THREE.Group();
   rKneePivot.position.set(0, (layout.hipY - layout.kneeY) * H, 0.01);
   rHipPivot.add(rKneePivot);
-  rKneePivot.add(makePartMesh(partMats.rightShin, rHipPx, layout.kneeY, 0));
+  rKneePivot.add(makePartMesh(partMats.rightShin, rHipPx, layout.kneeY, 0, 0.04));
+  const rBootSole = makeBootSole();
+  rBootSole.position.set(0, -(1.0 - layout.kneeY - 0.04) * H, -0.04);
+  rKneePivot.add(rBootSole);
+
+  // Live 3D Glowing Crescent Slash Arc & Arcane Cast Sigil attached to Runner!
+  const slashArcMat = new THREE.MeshBasicMaterial({
+    color: accent,
+    transparent: true,
+    opacity: 0.88,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const slashArcMesh = new THREE.Mesh(new THREE.RingGeometry(0.88, 1.58, 22, 1, -0.4, Math.PI * 1.15), slashArcMat);
+  slashArcMesh.position.set(0, 1.15, -0.35);
+  slashArcMesh.rotation.x = Math.PI * 0.44;
+  slashArcMesh.visible = false;
+  bodyPivot.add(slashArcMesh);
+
+  const castRingMesh = new THREE.Mesh(
+    new THREE.RingGeometry(0.55, 0.72, 24),
+    new THREE.MeshBasicMaterial({ color: 0x4cf3ff, transparent: true, opacity: 0.82, side: THREE.DoubleSide, depthWrite: false })
+  );
+  castRingMesh.position.set(0, 1.18, -0.78);
+  castRingMesh.visible = false;
+  bodyPivot.add(castRingMesh);
 
   bodyPivot.add(backRunGroup);
-
-  // Trigger clean offscreen canvas limb slicing & bind each skeletal texture!
-  getSkeletalParts(THREE, charData, (partsData) => {
-    for (const pn of partNames) {
-      partMats[pn].map = partsData.textures[pn];
-      partMats[pn].visible = true;
-      partMats[pn].needsUpdate = true;
-    }
-    root.userData.skeletalReady = true;
-  });
 
   // 2) SIDE-VIEW PROFILE PLANE (Used for Menu 360 turnaround & kinetic afterimage silhouettes!)
   const matSide = makeSpriteMat(texSide);
@@ -444,8 +551,11 @@ function createArticulatedImageRunnerRig(THREE, charData, skin, isGhost) {
   orbGroup.visible = false;
   root.add(orbGroup);
 
+  // CRITICAL: Initialize root.userData BEFORE calling getSkeletalParts() so synchronous cache hits NEVER get overwritten!
   root.userData = {
     isSpriteRig: true,
+    charId: charData.id,
+    accentColor: accent,
     skeletalReady: false,
     bodyPivot,
     backRunGroup,
@@ -463,6 +573,11 @@ function createArticulatedImageRunnerRig(THREE, charData, skin, isGhost) {
     lKneePivot,
     rHipPivot,
     rKneePivot,
+    rWeaponMesh,
+    lWeaponMesh,
+    slashArcMesh,
+    slashArcMat,
+    castRingMesh,
     sidePlane,
     frontPlane,
     spriteMats,
@@ -473,6 +588,17 @@ function createArticulatedImageRunnerRig(THREE, charData, skin, isGhost) {
     matAccent: matBack,
     baseTint: tintColor,
   };
+
+  // Trigger clean offscreen canvas limb slicing & bind each skeletal texture (works both sync-cached & async!)
+  getSkeletalParts(THREE, charData, (partsData) => {
+    for (const pn of partNames) {
+      partMats[pn].map = partsData.textures[pn];
+      partMats[pn].visible = true;
+      partMats[pn].needsUpdate = true;
+    }
+    root.userData.skeletalReady = true;
+  });
+
   return root;
 }
 
@@ -1417,60 +1543,384 @@ export function createRunnerMesh(THREE, charId = 'miller', skinId = 'default', i
   return root;
 }
 
-export function createChaserMesh(THREE, chaserId) {
-  const data = CHASERS[chaserId] || CHASERS.thornmaw;
-  const group = new THREE.Group();
+// === SHARED CANON CREATURE BUILDER ("Miller: The God of Void" — 7 Beast Tiers) ===
+// Builds multi-jointed animated 3D creatures facing `dirZ` (+1 = charging toward player, -1 = pursuing behind player!)
+function buildCanonCreatureParts(THREE, opts) {
+  const { creatureType, color, secondaryColor, eyeColor, scale = 1.0, dirZ = 1 } = opts;
+  const body = new THREE.Group();
+  body.scale.setScalar(scale);
 
-  const bodyMat = new THREE.MeshStandardMaterial({
-    color: data.color,
-    roughness: 0.4,
-    metalness: 0.32,
-    emissive: data.color,
-    emissiveIntensity: 0.25,
+  const mainMat = new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: 0.24,
+    roughness: 0.38,
+    metalness: 0.3,
   });
-  const eyeMat = new THREE.MeshBasicMaterial({ color: data.eyeColor });
+  const darkMat = new THREE.MeshStandardMaterial({
+    color: secondaryColor || 0x161224,
+    roughness: 0.55,
+    metalness: 0.35,
+  });
+  const glowMat = new THREE.MeshBasicMaterial({ color: eyeColor });
+  const parts = { creatureType, dirZ, legs: [], wings: [], tentacles: [], segments: [], rings: [], mirages: [] };
 
-  if (data.shape === 'wyrm') {
-    for (let i = 0; i < 5; i++) {
-      const seg = new THREE.Mesh(new THREE.OctahedronGeometry(0.95 - i * 0.1, 0), bodyMat);
-      seg.position.set(0, 1.5 + Math.sin(i) * 0.35, i * 1.15);
-      group.add(seg);
-      if (i < 3) {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(1.28 - i * 0.1, 0.07, 6, 18), eyeMat);
-        ring.position.copy(seg.position);
-        group.add(ring);
+  if (creatureType === 'quadruped') {
+    // WORLD 1 — ADVANCED TIER: Thornhound / Thornmaw (4-legged snarling predator with snapping jaw & spiked tail!)
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.54, 1.25), mainMat);
+    torso.position.set(0, 0.78, 0);
+    body.add(torso);
+    parts.torso = torso;
+
+    // Dorsal emerald thorn spines along back
+    for (let i = 0; i < 4; i++) {
+      const spine = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.36, 4), glowMat);
+      spine.position.set(0, 1.16, (i - 1.5) * 0.28 * dirZ);
+      spine.rotation.x = -0.35 * dirZ;
+      body.add(spine);
+    }
+
+    // Snarling horned head + articulated snapping lower jaw!
+    const headPivot = new THREE.Group();
+    headPivot.position.set(0, 0.96, 0.62 * dirZ);
+    const skull = new THREE.Mesh(new THREE.DodecahedronGeometry(0.32, 0), mainMat);
+    skull.scale.set(0.95, 0.85, 1.2);
+    headPivot.add(skull);
+
+    const jawPivot = new THREE.Group();
+    jawPivot.position.set(0, -0.14, 0.1 * dirZ);
+    const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.14, 0.42), darkMat);
+    jaw.position.set(0, 0, 0.14 * dirZ);
+    jawPivot.add(jaw);
+    for (const s of [-1, 1]) {
+      const fang = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.16, 4), glowMat);
+      fang.position.set(s * 0.11, 0.09, 0.28 * dirZ);
+      jawPivot.add(fang);
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.065, 6, 6), glowMat);
+      eye.position.set(s * 0.14, 0.08, 0.26 * dirZ);
+      headPivot.add(eye);
+      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.42, 4), darkMat);
+      horn.position.set(s * 0.2, 0.28, -0.05 * dirZ);
+      horn.rotation.set(-0.4 * dirZ, 0, -s * 0.35);
+      headPivot.add(horn);
+    }
+    headPivot.add(jawPivot);
+    body.add(headPivot);
+    parts.headPivot = headPivot;
+    parts.jawPivot = jawPivot;
+
+    // 4 Articulated galloping predator legs!
+    const legCoords = [
+      [-0.34, 0.62, 0.42 * dirZ],
+      [0.34, 0.62, 0.42 * dirZ],
+      [-0.34, 0.62, -0.45 * dirZ],
+      [0.34, 0.62, -0.45 * dirZ],
+    ];
+    for (const [lx, ly, lz] of legCoords) {
+      const lp = new THREE.Group();
+      lp.position.set(lx, ly, lz);
+      const limb = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.58, 0.18), darkMat);
+      limb.position.y = -0.28;
+      const claw = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.2, 4), glowMat);
+      claw.position.set(0, -0.56, 0.08 * dirZ);
+      claw.rotation.x = Math.PI / 2 * dirZ;
+      lp.add(limb, claw);
+      body.add(lp);
+      parts.legs.push(lp);
+    }
+
+    // Lashing spiked tail
+    const tailPivot = new THREE.Group();
+    tailPivot.position.set(0, 0.85, -0.62 * dirZ);
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.85, 5), mainMat);
+    tail.rotation.x = -1.25 * dirZ;
+    tail.position.set(0, 0.12, -0.36 * dirZ);
+    tailPivot.add(tail);
+    body.add(tailPivot);
+    parts.tailPivot = tailPivot;
+  } else if (creatureType === 'morph_brute' || creatureType === 'shapeshifter') {
+    // WORLD 2 — KING TIER: Skeld Morph-Draker (Shapeshifting volcanic beast with huge slashing claws & molten core!)
+    const torso = new THREE.Group();
+    torso.position.set(0, 1.02, 0);
+    const chest = new THREE.Mesh(new THREE.OctahedronGeometry(0.56, 0), mainMat);
+    chest.scale.set(1.18, 1.15, 0.92);
+    const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.32, 0), glowMat);
+    core.position.z = 0.28 * dirZ;
+    torso.add(chest, core);
+    body.add(torso);
+    parts.torso = torso;
+
+    const headPivot = new THREE.Group();
+    headPivot.position.set(0, 1.62, 0.18 * dirZ);
+    const head = new THREE.Mesh(new THREE.DodecahedronGeometry(0.32, 0), darkMat);
+    headPivot.add(head);
+    for (const s of [-1, 1]) {
+      const eye = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.08), glowMat);
+      eye.position.set(s * 0.13, 0.04, 0.26 * dirZ);
+      const crest = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.45, 4), glowMat);
+      crest.position.set(s * 0.24, 0.22, -0.04 * dirZ);
+      crest.rotation.z = -s * 0.55;
+      headPivot.add(eye, crest);
+    }
+    body.add(headPivot);
+    parts.headPivot = headPivot;
+
+    // Massive asymmetric volcanic slashing arms + heavy legs
+    for (const s of [-1, 1]) {
+      const armP = new THREE.Group();
+      armP.position.set(s * 0.62, 1.18, 0.06 * dirZ);
+      const upper = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.64, 0.24), mainMat);
+      upper.position.y = -0.26;
+      const blade = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.62, 4), glowMat);
+      blade.position.set(0, -0.68, 0.16 * dirZ);
+      blade.rotation.x = 0.8 * dirZ;
+      armP.add(upper, blade);
+      body.add(armP);
+      parts.wings.push(armP); // Animated as heavy slashing claws
+
+      const legP = new THREE.Group();
+      legP.position.set(s * 0.26, 0.58, 0);
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.58, 0.24), darkMat);
+      leg.position.y = -0.28;
+      legP.add(leg);
+      body.add(legP);
+      parts.legs.push(legP);
+    }
+  } else if (creatureType === 'arachnid') {
+    // WORLD 3 — EMPEROR TIER: Dreadwhisper Chimera (6 blade-tipped scuttling legs + concentric cyan psychic eyes + mirages!)
+    const torso = new THREE.Mesh(new THREE.OctahedronGeometry(0.5, 0), darkMat);
+    torso.scale.set(1.0, 0.72, 1.45);
+    torso.position.set(0, 0.92, 0);
+    body.add(torso);
+    parts.torso = torso;
+
+    // Elongated eyeless alien skull with concentric glowing cyan ocular sensor ring!
+    const headPivot = new THREE.Group();
+    headPivot.position.set(0, 1.05, 0.68 * dirZ);
+    const skull = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.68, 6), mainMat);
+    skull.rotation.x = Math.PI / 2 * dirZ;
+    headPivot.add(skull);
+    const eyeRing = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.04, 6, 16), glowMat);
+    eyeRing.position.set(0, 0.04, 0.24 * dirZ);
+    const centerEye = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), glowMat);
+    centerEye.position.set(0, 0.04, 0.26 * dirZ);
+    headPivot.add(eyeRing, centerEye);
+    body.add(headPivot);
+    parts.headPivot = headPivot;
+    parts.rings.push(eyeRing);
+
+    // 6 Articulated blade-tipped scuttling arachnid legs!
+    for (const s of [-1, 1]) {
+      for (let i = 0; i < 3; i++) {
+        const legP = new THREE.Group();
+        legP.position.set(s * 0.42, 0.88, (i - 1) * 0.34);
+        const femur = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.1, 0.1), mainMat);
+        femur.position.set(s * 0.22, 0.14, 0);
+        femur.rotation.z = s * 0.45;
+        const blade = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.82, 4), glowMat);
+        blade.position.set(s * 0.44, -0.26, 0);
+        blade.rotation.z = -s * 0.18 + Math.PI;
+        legP.add(femur, blade);
+        body.add(legP);
+        parts.legs.push(legP);
       }
     }
-  } else if (data.shape === 'sovereign') {
-    const core = new THREE.Mesh(new THREE.OctahedronGeometry(1.3, 0), bodyMat);
-    core.position.y = 1.9;
-    group.add(core);
-    const halo = new THREE.Mesh(new THREE.TorusGeometry(1.75, 0.09, 6, 24), eyeMat);
-    halo.position.y = 2.0;
-    group.add(halo);
+
+    // Translucent psychic mirage silhouettes flanking left & right!
+    const mirageMat = new THREE.MeshBasicMaterial({ color: eyeColor, transparent: true, opacity: 0.28, wireframe: true });
+    for (const s of [-1, 1]) {
+      const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.36, 0), mirageMat);
+      m.position.set(s * 0.82, 1.05, -0.2 * dirZ);
+      body.add(m);
+      parts.mirages.push(m);
+    }
+  } else if (creatureType === 'drake') {
+    // WORLD 4 — LEGENDARY TIER: Pyreclad Flame-Drake (Flapping fiery dragon wings, snapping horned jaw & barbed flame tail!)
+    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.42, 1.05, 7), mainMat);
+    torso.rotation.x = 0.85 * dirZ;
+    torso.position.set(0, 1.15, 0);
+    body.add(torso);
+    parts.torso = torso;
+
+    const headPivot = new THREE.Group();
+    headPivot.position.set(0, 1.48, 0.56 * dirZ);
+    const snout = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.56, 5), mainMat);
+    snout.rotation.x = Math.PI / 2 * dirZ;
+    headPivot.add(snout);
+    const jawPivot = new THREE.Group();
+    jawPivot.position.set(0, -0.1, 0.08 * dirZ);
+    const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.09, 0.36), darkMat);
+    jaw.position.z = 0.14 * dirZ;
+    jawPivot.add(jaw);
+    headPivot.add(jawPivot);
+    for (const s of [-1, 1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 6), glowMat);
+      eye.position.set(s * 0.12, 0.08, 0.14 * dirZ);
+      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.45, 4), glowMat);
+      horn.position.set(s * 0.16, 0.22, -0.1 * dirZ);
+      horn.rotation.set(-0.65 * dirZ, 0, -s * 0.3);
+      headPivot.add(eye, horn);
+    }
+    body.add(headPivot);
+    parts.headPivot = headPivot;
+    parts.jawPivot = jawPivot;
+
+    // Sweeping articulated dragon wings (flapping rhythmically!)
+    const wingMembraneMat = new THREE.MeshBasicMaterial({ color: eyeColor, transparent: true, opacity: 0.72, side: THREE.DoubleSide });
+    for (const s of [-1, 1]) {
+      const wPivot = new THREE.Group();
+      wPivot.position.set(s * 0.34, 1.28, -0.05 * dirZ);
+      const spar = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.09, 0.1), darkMat);
+      spar.position.set(s * 0.46, 0.12, 0);
+      const membrane = new THREE.Mesh(new THREE.PlaneGeometry(0.96, 0.64), wingMembraneMat);
+      membrane.position.set(s * 0.48, -0.1, -0.12 * dirZ);
+      membrane.rotation.x = 0.25 * dirZ;
+      wPivot.add(spar, membrane);
+      body.add(wPivot);
+      parts.wings.push(wPivot);
+    }
+
+    const tailPivot = new THREE.Group();
+    tailPivot.position.set(0, 0.92, -0.52 * dirZ);
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.95, 5), glowMat);
+    tail.rotation.x = -1.35 * dirZ;
+    tail.position.set(0, 0.05, -0.42 * dirZ);
+    tailPivot.add(tail);
+    body.add(tailPivot);
+    parts.tailPivot = tailPivot;
+  } else if (creatureType === 'wyrm') {
+    // WORLD 5 — DEMIGOD TIER: Chronal Wyrm (6-segment coiling glacial serpent + snapping mandibles + orbiting temporal rings!)
+    for (let i = 0; i < 6; i++) {
+      const seg = new THREE.Group();
+      const rad = 0.42 - i * 0.045;
+      const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(rad, 0), i % 2 === 0 ? mainMat : darkMat);
+      seg.add(mesh);
+      seg.position.set(0, 1.18, (0.65 - i * 0.48) * dirZ);
+      body.add(seg);
+      parts.segments.push(seg);
+
+      if (i === 0) {
+        // Serpentine head with blinding dimensional eye & crystalline mandibles
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8), glowMat);
+        eye.position.set(0, 0.04, 0.34 * dirZ);
+        seg.add(eye);
+        for (const s of [-1, 1]) {
+          const mand = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.34, 4), glowMat);
+          mand.position.set(s * 0.22, -0.1, 0.28 * dirZ);
+          mand.rotation.set(1.1 * dirZ, 0, s * 0.35);
+          seg.add(mand);
+        }
+      } else if (i <= 3) {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(rad * 1.48, 0.04, 6, 18), glowMat);
+        seg.add(ring);
+        parts.rings.push(ring);
+      }
+    }
+  } else if (creatureType === 'tendril_fiend' || creatureType === 'demon') {
+    // WORLD 6 — DEMON TIER: Voidstalker Fiend (Hovering horned void demon with 4 writhing multi-joint shadow tentacles!)
+    const torso = new THREE.Mesh(new THREE.DodecahedronGeometry(0.46, 0), darkMat);
+    torso.scale.set(1.0, 1.32, 0.88);
+    torso.position.set(0, 1.24, 0);
+    body.add(torso);
+    parts.torso = torso;
+
+    const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.24, 0), glowMat);
+    core.position.set(0, 1.18, 0.32 * dirZ);
+    body.add(core);
+
+    const headPivot = new THREE.Group();
+    headPivot.position.set(0, 1.82, 0.1 * dirZ);
+    const skull = new THREE.Mesh(new THREE.OctahedronGeometry(0.28, 0), mainMat);
+    headPivot.add(skull);
+    for (const s of [-1, 1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.065, 6, 6), glowMat);
+      eye.position.set(s * 0.11, 0.04, 0.22 * dirZ);
+      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.52, 4), glowMat);
+      horn.position.set(s * 0.22, 0.28, -0.02 * dirZ);
+      horn.rotation.z = -s * 0.42;
+      headPivot.add(eye, horn);
+    }
+    body.add(headPivot);
+    parts.headPivot = headPivot;
+
+    // 4 Writhing shadow tentacles!
+    for (let i = 0; i < 4; i++) {
+      const side = i % 2 === 0 ? -1 : 1;
+      const rowY = i < 2 ? 1.38 : 0.92;
+      const tPivot = new THREE.Group();
+      tPivot.position.set(side * 0.38, rowY, 0);
+      const seg1 = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.56, 6), mainMat);
+      seg1.rotation.z = side * 1.15;
+      seg1.position.set(side * 0.26, -0.06, 0.06 * dirZ);
+      const seg2 = new THREE.Mesh(new THREE.ConeGeometry(0.065, 0.58, 5), glowMat);
+      seg2.rotation.z = side * 1.65;
+      seg2.position.set(side * 0.68, -0.14, 0.18 * dirZ);
+      tPivot.add(seg1, seg2);
+      body.add(tPivot);
+      parts.tentacles.push(tPivot);
+    }
   } else {
-    const hull = new THREE.Mesh(new THREE.BoxGeometry(2.15, 1.55, 2.5), bodyMat);
-    hull.position.y = 1.2;
-    group.add(hull);
-    const head = new THREE.Mesh(new THREE.DodecahedronGeometry(0.88, 0), bodyMat);
-    head.position.set(0, 1.75, -1.3);
-    group.add(head);
-    for (let s = -1; s <= 1; s += 2) {
-      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.24, 1.05, 5), eyeMat);
-      horn.position.set(s * 0.62, 2.38, -1.1);
-      horn.rotation.z = -s * 0.35;
-      group.add(horn);
-      const claw = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.38, 1.35), bodyMat);
-      claw.position.set(s * 1.12, 0.75, -1.35);
-      group.add(claw);
+    // WORLD 7 — YIGYANG / ABYSSAL TIER: Abyssal Seraph-Stalker / Null Sovereign (Bifurcated white-obsidian core + 6 fanning blade-wings!)
+    const torso = new THREE.Group();
+    torso.position.set(0, 1.35, 0);
+    const lightHalf = new THREE.Mesh(new THREE.OctahedronGeometry(0.48, 0), mainMat);
+    lightHalf.position.x = -0.06;
+    const darkHalf = new THREE.Mesh(new THREE.OctahedronGeometry(0.46, 0), darkMat);
+    darkHalf.position.x = 0.06;
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 10), glowMat);
+    eye.position.z = 0.38 * dirZ;
+    torso.add(lightHalf, darkHalf, eye);
+    body.add(torso);
+    parts.torso = torso;
+
+    // Dual counter-rotating celestial-void halos
+    const r1 = new THREE.Mesh(new THREE.TorusGeometry(0.76, 0.045, 6, 22), glowMat);
+    r1.position.set(0, 1.35, 0);
+    const r2 = new THREE.Mesh(new THREE.TorusGeometry(0.95, 0.032, 6, 22), new THREE.MeshBasicMaterial({ color: 0xb466ff }));
+    r2.position.set(0, 1.35, 0);
+    body.add(r1, r2);
+    parts.rings.push(r1, r2);
+
+    // 6 Articulated geometric blade-wings fanning symmetrically!
+    for (const s of [-1, 1]) {
+      for (let i = 0; i < 3; i++) {
+        const wP = new THREE.Group();
+        wP.position.set(s * 0.42, 1.52 - i * 0.24, -0.08 * dirZ);
+        const blade = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.95 - i * 0.12, 4), i === 1 ? glowMat : mainMat);
+        blade.rotation.z = -s * (1.1 + i * 0.25);
+        blade.position.set(s * 0.46, 0.05, 0);
+        wP.add(blade);
+        body.add(wP);
+        parts.wings.push(wP);
+      }
     }
   }
 
-  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.24, 8, 8), eyeMat);
-  eyeL.position.set(-0.42, 1.85, -1.95);
-  const eyeR = eyeL.clone();
-  eyeR.position.x = 0.42;
-  group.add(eyeL, eyeR);
+  return { body, parts };
+}
+
+export function createChaserMesh(THREE, chaserId) {
+  const data = CHASERS[chaserId] || CHASERS.thornmaw;
+  const group = new THREE.Group();
+  const typeMap = {
+    quadruped: 'quadruped',
+    shapeshifter: 'morph_brute',
+    arachnid: 'arachnid',
+    drake: 'drake',
+    wyrm: 'wyrm',
+    demon: 'tendril_fiend',
+    sovereign: 'seraph',
+  };
+  const built = buildCanonCreatureParts(THREE, {
+    creatureType: typeMap[data.shape] || 'quadruped',
+    color: data.color,
+    secondaryColor: 0x140d1e,
+    eyeColor: data.eyeColor,
+    scale: 1.78,
+    dirZ: -1, // Pursuing forward toward -Z!
+  });
+  group.add(built.body);
+  group.userData = { creature: built.parts, body: built.body, data };
   return group;
 }
 
@@ -1740,74 +2190,39 @@ export function createCollectibleMesh(THREE, kind) {
   return g;
 }
 
-// === PORTAL-BASED CHARGING ENEMY (Emerges from Mini-Rift & Charges Player) ===
+// === PORTAL-BASED CHARGING CANON CREATURE (Emerges from Mini-Rift & Charges Player) ===
 export function createPortalEnemyMesh(THREE, worldId = 1) {
   const spec = PORTAL_ENEMIES[worldId] || PORTAL_ENEMIES[1];
   const g = new THREE.Group();
 
-  const bodyMat = new THREE.MeshStandardMaterial({
+  const built = buildCanonCreatureParts(THREE, {
+    creatureType: spec.creatureType || 'quadruped',
     color: spec.color,
-    emissive: spec.eyeColor,
-    emissiveIntensity: 0.35,
-    roughness: 0.4,
-    metalness: 0.3,
+    secondaryColor: spec.secondaryColor,
+    eyeColor: spec.eyeColor,
+    scale: 0.96,
+    dirZ: 1, // Charging directly toward the player (+Z)!
   });
-  const glowMat = new THREE.MeshBasicMaterial({ color: spec.eyeColor });
+  g.add(built.body);
 
-  // Aggressive hunched charger torso
-  const torso = new THREE.Mesh(new THREE.OctahedronGeometry(0.46, 0), bodyMat);
-  torso.scale.set(1.0, 1.25, 0.95);
-  torso.position.y = 1.0;
-  g.add(torso);
-
-  // Horned head facing player (+Z)
-  const head = new THREE.Mesh(new THREE.DodecahedronGeometry(0.3, 0), bodyMat);
-  head.position.set(0, 1.54, 0.14);
-  g.add(head);
-
-  const eyeL = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.055, 0.06), glowMat);
-  eyeL.position.set(-0.1, 1.56, 0.38);
-  const eyeR = eyeL.clone();
-  eyeR.position.x = 0.1;
-  g.add(eyeL, eyeR);
-
-  for (const s of [-1, 1]) {
-    const horn = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.36, 4), glowMat);
-    horn.position.set(s * 0.22, 1.76, 0.08);
-    horn.rotation.z = -s * 0.45;
-    g.add(horn);
-  }
-
-  // Animated thrashing arms & legs
-  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.56, 0.16), bodyMat);
-  armL.position.set(-0.46, 1.02, 0.18);
-  const armR = armL.clone();
-  armR.position.x = 0.46;
-
-  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.58, 0.18), bodyMat);
-  legL.position.set(-0.18, 0.32, 0);
-  const legR = legL.clone();
-  legR.position.x = 0.18;
-  g.add(armL, armR, legL, legR);
-
-  // Pulsing ground threat ring
+  // Pulsing ground threat ring beneath creature
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(0.46, 0.62, 16),
-    new THREE.MeshBasicMaterial({ color: spec.eyeColor, side: THREE.DoubleSide, transparent: true, opacity: 0.78 })
+    new THREE.RingGeometry(0.52, 0.68, 18),
+    new THREE.MeshBasicMaterial({ color: spec.eyeColor, side: THREE.DoubleSide, transparent: true, opacity: 0.8 })
   );
   ring.rotation.x = -Math.PI / 2;
   ring.position.y = 0.05;
   g.add(ring);
 
-  // Mini-rift portal ring that opens behind enemy when it spawns!
+  // Mini-rift portal ring that opens behind creature as it leaps out!
   const riftRing = new THREE.Mesh(
-    new THREE.TorusGeometry(0.95, 0.09, 6, 18),
-    new THREE.MeshBasicMaterial({ color: spec.eyeColor, transparent: true, opacity: 0.85 })
+    new THREE.TorusGeometry(1.05, 0.09, 6, 20),
+    new THREE.MeshBasicMaterial({ color: spec.eyeColor, transparent: true, opacity: 0.88 })
   );
-  riftRing.position.set(0, 1.05, -0.5);
+  riftRing.position.set(0, 1.08, -0.65);
   g.add(riftRing);
 
-  g.userData = { armL, armR, legL, legR, ring, riftRing, spec };
+  g.userData = { creature: built.parts, body: built.body, ring, riftRing, spec };
   return g;
 }
 

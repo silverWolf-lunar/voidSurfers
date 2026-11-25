@@ -244,6 +244,7 @@ export class VoidRunEngine {
 
   showMenuMode() {
     this.mode = 'menu';
+    this.menuPreviewMotion = 'idle';
     this.menuGroup.visible = true;
     this.runGroup.visible = false;
     this.applyWorldVisuals(saveManager.data.selectedWorld || 1);
@@ -252,6 +253,20 @@ export class VoidRunEngine {
     this.camera.position.set(0, 2.05, 4.9);
     this.camera.lookAt(0, 1.15, 0);
     this.refreshMenuCharacter();
+  }
+
+  setMenuPreviewMotion(motionMode = 'idle', charId = null) {
+    this.menuPreviewMotion = motionMode;
+    if (charId && (!this.menuCharMesh || this.menuCharMesh.userData.charId !== charId)) {
+      this.refreshMenuCharacter(charId, saveManager.data.selectedSkin);
+    }
+    if (motionMode === 'run' || motionMode === 'attack') {
+      this.camera.position.set(0.35, 1.85, 4.15);
+      this.camera.lookAt(0, 1.05, 0);
+    } else {
+      this.camera.position.set(0, 2.05, 4.9);
+      this.camera.lookAt(0, 1.15, 0);
+    }
   }
 
   // --- INPUT ---
@@ -486,6 +501,11 @@ export class VoidRunEngine {
       enemySlowTimer: 0,
       enemySlowFactor: 1.0,
       enemySlowBy: '',
+      attackAnimTimer: 0,
+      attackAnimDuration: 0.52,
+      attackType: 'slash',
+      attackComboSide: 1,
+      lastStrideSign: 1,
 
       // Arcade Score & Multiplier System!
       score: 0,
@@ -942,6 +962,16 @@ export class VoidRunEngine {
     const range = w.range * (r.heroBonuses ? r.heroBonuses.rangeMult : 1.0);
     r.weaponCd = w.cd;
     r.enemySlowTimer = 0; // Weapon slash cleaves off snares!
+
+    // Trigger full 3-phase hero-specific weapon attack choreography!
+    r.attackAnimDuration = 0.52;
+    r.attackAnimTimer = 0.52;
+    r.attackComboSide = -(r.attackComboSide || 1);
+    r.attackType =
+      r.charId === 'brann' ? 'slam' :
+      r.charId === 'elara' ? 'thrust' :
+      r.charId === 'nyx' ? 'twin' : 'slash';
+
     audioEngine.playWeaponStrike();
     NativeBridge.vibrate(25);
 
@@ -1033,16 +1063,16 @@ export class VoidRunEngine {
         e.x += (e.targetX - e.x) * Math.min(1, rawDt * 7);
         e.mesh.position.set(e.x, 0, e.z);
 
-        // Animate charging limbs & fading spawn rift
+        // Animate canon creature locomotion, jaw snaps, wings, tentacles, undulating wyrm segments & rift leap!
         const ud = e.mesh.userData;
-        const cyc = now * 0.02;
-        ud.legL.rotation.x = Math.sin(cyc) * 0.9;
-        ud.legR.rotation.x = -Math.sin(cyc) * 0.9;
-        ud.armL.rotation.x = -0.6 + Math.sin(cyc) * 0.5;
-        ud.armR.rotation.x = -0.6 - Math.sin(cyc) * 0.5;
+        const closeBoost = e.z > -14 ? 1.5 : 1.0;
+        const emergeScale = Math.min(1, 0.28 + e.portalAge * 2.2);
+        if (ud.body) ud.body.scale.setScalar(0.96 * emergeScale);
+        this.animateCanonCreature(ud.creature, now * 0.001, closeBoost, e.z > -12);
+        if (ud.ring) ud.ring.rotation.z += rawDt * 2.4;
         if (ud.riftRing) {
-          ud.riftRing.rotation.z += rawDt * 4;
-          const fade = Math.max(0, 1 - e.portalAge * 1.4);
+          ud.riftRing.rotation.z += rawDt * 4.5;
+          const fade = Math.max(0, 1 - e.portalAge * 1.35);
           ud.riftRing.visible = fade > 0.05;
           ud.riftRing.scale.set(fade, fade, fade);
         }
@@ -1182,6 +1212,9 @@ export class VoidRunEngine {
     this.run.lastPowerUsed = info.id;
     this.run.infestedTimer = 0;
     this.run.enemySlowTimer = 0; // Casting a Void Power shatters enemy slow snares!
+    this.run.attackAnimDuration = 0.44;
+    this.run.attackAnimTimer = 0.44;
+    this.run.attackType = 'cast';
     if (this.run.gear.relic.cdReduction) {
       this.run.cooldowns[info.id] *= 1 - this.run.gear.relic.cdReduction;
     }
@@ -1618,7 +1651,95 @@ export class VoidRunEngine {
       const visualZ = 1.8 + r.chaserDist * 0.24;
       this.chaserMesh.position.z += (visualZ - this.chaserMesh.position.z) * Math.min(1, dt * 8);
       this.chaserMesh.position.x += (r.x * 0.85 - this.chaserMesh.position.x) * Math.min(1, dt * 5);
-      this.chaserMesh.position.y = Math.abs(Math.sin(performance.now() * 0.01)) * 0.3;
+      this.chaserMesh.position.y = Math.abs(Math.sin(performance.now() * 0.011)) * 0.28;
+      if (this.chaserMesh.userData.creature) {
+        this.animateCanonCreature(this.chaserMesh.userData.creature, performance.now() * 0.001, r.chaserDist < 18 ? 1.45 : 1.0, r.chaserDist < 18);
+      }
+    }
+  }
+
+  animateCanonCreature(cr, t, speedMult = 1.0, isLunging = false) {
+    if (!cr) return;
+    const cyc = t * 11.5 * speedMult;
+    const ct = cr.creatureType;
+
+    if (ct === 'quadruped') {
+      // 4-legged galloping Thornhound / Thornmaw + snapping jaw & thrashing spiked tail!
+      const s = Math.sin(cyc);
+      if (cr.legs.length >= 4) {
+        cr.legs[0].rotation.x = s * 0.95;
+        cr.legs[1].rotation.x = Math.sin(cyc + 0.55) * 0.95;
+        cr.legs[2].rotation.x = -s * 0.95;
+        cr.legs[3].rotation.x = -Math.sin(cyc + 0.55) * 0.95;
+      }
+      if (cr.torso) cr.torso.position.y = 0.78 + Math.abs(Math.cos(cyc)) * 0.16;
+      if (cr.headPivot) cr.headPivot.rotation.x = Math.sin(cyc) * 0.14;
+      if (cr.jawPivot) cr.jawPivot.rotation.x = (isLunging ? 0.52 : 0.24) + Math.abs(Math.sin(cyc * 1.4)) * 0.32;
+      if (cr.tailPivot) cr.tailPivot.rotation.y = Math.sin(cyc * 1.3) * 0.62;
+    } else if (ct === 'morph_brute') {
+      // Skeld King-Tier Shapeshifter: pulsing morph scale + heavy slashing magma claws!
+      const morph = Math.sin(t * 2.8);
+      if (cr.torso) {
+        cr.torso.scale.set(1 + morph * 0.22, 1 - morph * 0.14, 1 + morph * 0.14);
+        cr.torso.rotation.y = Math.sin(cyc) * 0.22;
+      }
+      cr.wings.forEach((arm, idx) => {
+        const sgn = idx === 0 ? 1 : -1;
+        arm.rotation.x = (isLunging ? -1.1 : -0.4) + Math.sin(cyc + idx * Math.PI) * 0.85;
+        arm.rotation.z = sgn * (0.18 + Math.abs(Math.sin(cyc)) * 0.25);
+      });
+      cr.legs.forEach((leg, idx) => { leg.rotation.x = Math.sin(cyc + idx * Math.PI) * 0.85; });
+    } else if (ct === 'arachnid') {
+      // Dreadwhisper Emperor-Tier: 6 scuttling blade-legs + rotating cyan psychic ocular ring + drifting mirages!
+      cr.legs.forEach((leg, idx) => {
+        const phase = cyc * 1.45 + idx * 1.1;
+        leg.rotation.y = Math.sin(phase) * 0.42;
+        leg.rotation.z = Math.cos(phase) * 0.26;
+      });
+      if (cr.rings[0]) cr.rings[0].rotation.z = t * 4.2;
+      cr.mirages.forEach((m, idx) => {
+        const sgn = idx === 0 ? -1 : 1;
+        m.position.x = sgn * (0.72 + Math.sin(t * 4.5 + idx) * 0.22);
+        m.position.y = 1.05 + Math.cos(t * 3.8 + idx) * 0.18;
+        m.rotation.y = t * 3.2 * sgn;
+      });
+    } else if (ct === 'drake') {
+      // Pyreclad Legendary-Tier: sweeping flapping dragon wings + swooping glide + snapping flame jaw!
+      const flap = Math.sin(t * 9.5 * speedMult);
+      cr.wings.forEach((w, idx) => {
+        const sgn = idx === 0 ? -1 : 1;
+        w.rotation.z = sgn * (0.25 + flap * 0.68);
+      });
+      if (cr.torso) cr.torso.position.y = 1.15 - flap * 0.18;
+      if (cr.jawPivot) cr.jawPivot.rotation.x = (isLunging ? 0.55 : 0.2) + Math.abs(flap) * 0.28;
+      if (cr.tailPivot) cr.tailPivot.rotation.y = Math.sin(t * 8.0) * 0.55;
+    } else if (ct === 'wyrm') {
+      // Chronal Wyrm Demigod-Tier: sinusoidal serpentine slither + spinning golden temporal rings!
+      cr.segments.forEach((seg, idx) => {
+        seg.position.x = Math.sin(t * 7.2 * speedMult - idx * 0.72) * (0.28 + idx * 0.04);
+        seg.position.y = 1.16 + Math.cos(t * 5.8 * speedMult - idx * 0.65) * 0.24;
+      });
+      cr.rings.forEach((r, idx) => {
+        r.rotation.x = t * 2.5 + idx;
+        r.rotation.y = t * 3.4 * (idx % 2 === 0 ? 1 : -1);
+      });
+    } else if (ct === 'tendril_fiend') {
+      // Voidstalker Demon-Tier: hovering menace + 4 wildly writhing shadow tentacles!
+      if (cr.torso) cr.torso.position.y = 1.24 + Math.sin(t * 4.2) * 0.16;
+      cr.tentacles.forEach((ten, idx) => {
+        const sgn = idx % 2 === 0 ? -1 : 1;
+        ten.rotation.y = Math.sin(t * 7.5 * speedMult + idx * 1.4) * 0.55;
+        ten.rotation.z = sgn * (0.25 + Math.cos(t * 6.5 * speedMult + idx) * 0.45);
+      });
+    } else {
+      // Abyssal Seraph-Stalker / Null Sovereign Yigyang-Tier: 6 fanning celestial blade-wings + counter-spinning halos!
+      if (cr.torso) cr.torso.position.y = 1.35 + Math.sin(t * 3.8) * 0.18;
+      if (cr.rings[0]) { cr.rings[0].rotation.z = t * 3.2; cr.rings[0].rotation.x = Math.sin(t * 2) * 0.45; }
+      if (cr.rings[1]) { cr.rings[1].rotation.z = -t * 2.4; cr.rings[1].rotation.y = Math.cos(t * 2) * 0.55; }
+      cr.wings.forEach((w, idx) => {
+        const sgn = idx < 3 ? -1 : 1;
+        w.rotation.y = sgn * (0.22 + Math.sin(t * 6.0 * speedMult + (idx % 3) * 0.5) * 0.42);
+      });
     }
   }
 
@@ -1877,11 +1998,107 @@ export class VoidRunEngine {
 
     if (this.mode === 'menu') {
       if (this.menuCharMesh) {
-        if (this.menuCharMesh.userData.isSpriteRig) {
+        const ud = this.menuCharMesh.userData;
+        const pMode = this.menuPreviewMotion || 'idle';
+        if (ud.isSpriteRig && (pMode === 'run' || pMode === 'attack') && ud.skeletalReady) {
+          // Live 3D 10-part skeletal Running & Attacking showcase right inside Character Select!
+          ud.frontPlane.visible = false;
+          ud.sidePlane.visible = false;
+          ud.backRunGroup.visible = true;
+          ud.skelGroup.visible = true;
+          ud.backFullPlane.visible = false;
+
+          const runC = now * 0.0155;
+          const s = Math.sin(runC);
+          const c = Math.cos(runC);
+          this.menuCharMesh.position.y = 0;
+          // Angle 3/4 so player sees torso twist, pumping hands, kicking 3D boots & weapon slashes!
+          ud.bodyPivot.rotation.set(0, Math.sin(now * 0.0014) * 0.55, 0);
+          ud.bodyPivot.scale.set(1, 1, 1);
+
+          ud.hipsPivot.position.set(s * 0.05, ud.hipBaseY + Math.abs(c) * 0.14, 0);
+          ud.hipsPivot.rotation.set(0, -s * 0.18, s * 0.08);
+          ud.torsoPivot.rotation.set(-0.22, s * 0.34, -s * 0.09);
+          ud.headPivot.rotation.set(0.14 + Math.abs(c) * 0.05, -s * 0.16, s * 0.04);
+
+          const lArm = -s;
+          ud.lShoulderPivot.rotation.set(lArm * 0.56, 0, 0.46 - lArm * 0.18);
+          ud.lShoulderPivot.position.z = -0.02 + lArm * 0.16;
+          ud.lElbowPivot.rotation.set(-0.48 - Math.max(0, lArm) * 0.26, 0, -0.22 - lArm * 0.32);
+
+          const rArm = s;
+          ud.rShoulderPivot.rotation.set(rArm * 0.56, 0, -0.46 + rArm * 0.18);
+          ud.rShoulderPivot.position.z = -0.02 + rArm * 0.16;
+          ud.rElbowPivot.rotation.set(-0.48 - Math.max(0, rArm) * 0.26, 0, 0.22 + rArm * 0.32);
+
+          const lFwd = Math.max(0, s);
+          const lBack = Math.max(0, -s);
+          ud.lHipPivot.position.y = lFwd * 0.2 + lBack * 0.11;
+          ud.lHipPivot.rotation.set(-s * 0.56, 0, 0.04);
+          ud.lHipPivot.scale.y = 1 - lBack * 0.12 - lFwd * 0.08;
+          ud.lKneePivot.rotation.set(0.18 + lBack * 0.92 + Math.max(0, c) * 0.36, 0, 0);
+          ud.lKneePivot.scale.y = 1 - lBack * 0.18;
+
+          const rFwd = Math.max(0, -s);
+          const rBack = Math.max(0, s);
+          ud.rHipPivot.position.y = rFwd * 0.2 + rBack * 0.11;
+          ud.rHipPivot.rotation.set(s * 0.56, 0, -0.04);
+          ud.rHipPivot.scale.y = 1 - rBack * 0.12 - rFwd * 0.08;
+          ud.rKneePivot.rotation.set(0.18 + rBack * 0.92 + Math.max(0, -c) * 0.36, 0, 0);
+          ud.rKneePivot.scale.y = 1 - rBack * 0.18;
+
+          if (ud.slashArcMesh) ud.slashArcMesh.visible = false;
+          if (ud.castRingMesh) ud.castRingMesh.visible = false;
+          if (ud.rWeaponMesh) ud.rWeaponMesh.scale.setScalar(pMode === 'attack' ? 1.24 : 0.9);
+
+          if (pMode === 'attack') {
+            const cycleMs = 950;
+            const atkP = (now % cycleMs) / cycleMs;
+            const dir = Math.floor(now / cycleMs) % 2 === 0 ? 1 : -1;
+            const swing = atkP < 0.24 ? -(atkP / 0.24) : atkP < 0.68 ? -1 + 2 * (1 - Math.pow(1 - (atkP - 0.24) / 0.44, 3)) : 1 - (atkP - 0.68) / 0.32;
+            const slashVis = atkP >= 0.24 && atkP < 0.68;
+            const slashProg = slashVis ? (atkP - 0.24) / 0.44 : 0;
+            const cid = ud.charId;
+            if (cid === 'brann') {
+              ud.torsoPivot.rotation.x = -0.18 + swing * 0.46;
+              ud.rShoulderPivot.rotation.set(-0.55 + swing * 0.85, 0, 1.05 - swing * 1.35);
+              ud.lShoulderPivot.rotation.set(-0.45 + swing * 0.75, 0, -0.85 + swing * 1.15);
+            } else if (cid === 'nyx') {
+              ud.torsoPivot.rotation.y = swing * 0.45 * dir;
+              ud.rShoulderPivot.rotation.set(-0.45 - swing * 0.35, 0, -0.85 + swing * 1.45);
+              ud.lShoulderPivot.rotation.set(-0.45 - swing * 0.35, 0, 0.85 - swing * 1.45);
+            } else if (cid === 'elara') {
+              ud.torsoPivot.rotation.y = -0.58 * swing;
+              ud.rShoulderPivot.rotation.set(-0.62, 0, 0.25 - swing * 0.85);
+              if (ud.castRingMesh && slashVis) {
+                ud.castRingMesh.visible = true;
+                const cs = 0.6 + slashProg * 1.0;
+                ud.castRingMesh.scale.set(cs, cs, 1);
+                ud.castRingMesh.rotation.z = slashProg * 4.5;
+              }
+            } else {
+              ud.torsoPivot.rotation.y = -swing * 0.82 * dir;
+              ud.rShoulderPivot.rotation.set(-0.55, 0, dir > 0 ? 0.65 - swing * 1.45 : -0.75 + swing * 1.35);
+              ud.rElbowPivot.rotation.set(-0.28, 0, -swing * 0.65 * dir);
+            }
+            if (ud.slashArcMesh && slashVis) {
+              ud.slashArcMesh.visible = true;
+              ud.slashArcMat.color.setHex(ud.accentColor || 0x4cf3ff);
+              ud.slashArcMat.opacity = Math.sin(slashProg * Math.PI) * 0.92;
+              const sc = 0.85 + slashProg * 0.45;
+              ud.slashArcMesh.scale.set(sc * dir, sc, 1);
+              ud.slashArcMesh.rotation.z = (-0.9 + slashProg * 2.4) * dir;
+              ud.slashArcMesh.rotation.x = cid === 'brann' ? 0.15 : Math.PI * 0.44;
+            }
+          }
+        } else if (ud.isSpriteRig) {
+          if (ud.slashArcMesh) ud.slashArcMesh.visible = false;
+          if (ud.castRingMesh) ud.castRingMesh.visible = false;
+          ud.bodyPivot.rotation.set(0, 0, 0);
           this.menuTurnAngle = (this.menuTurnAngle || 0) + rawDt * 0.42;
           this.updateMenuSpriteTurnaround(this.menuTurnAngle);
           this.menuCharMesh.position.y = Math.sin(now * 0.0032) * 0.06;
-          this.menuCharMesh.userData.bodyPivot.scale.set(
+          ud.bodyPivot.scale.set(
             1 + Math.sin(now * 0.0028) * 0.015,
             1 + Math.cos(now * 0.0028) * 0.018,
             1
@@ -1889,9 +2106,7 @@ export class VoidRunEngine {
         } else {
           this.menuCharMesh.rotation.y += rawDt * 0.45;
           this.menuCharMesh.position.y = Math.sin(now * 0.003) * 0.06;
-          if (this.menuCharMesh.userData.scarf) {
-            this.menuCharMesh.userData.scarf.rotation.x = 0.35 + Math.sin(now * 0.005) * 0.14;
-          }
+          if (ud.scarf) ud.scarf.rotation.x = 0.35 + Math.sin(now * 0.005) * 0.14;
         }
       }
       if (this.menuRing) this.menuRing.rotation.z += rawDt * 0.85;
@@ -1947,7 +2162,7 @@ export class VoidRunEngine {
       'voidSenseTimer', 'stillstepTimer', 'voidwalkTimer', 'eclipseVeilTimer', 'chronalHavenTimer',
       'voidDomainTimer', 'voidlightTimer', 'conceptReversalTimer', 'ritualWardTimer', 'cryoPathTimer',
       'voidResonanceTimer', 'infestedTimer', 'timeSlowZoneTimer', 'gravityDriftTimer', 'darkVeilTimer',
-      'controlsInvertedTimer', 'emotionSlugTimer', 'bonusHighwayTimer', 'weaponCd', 'enemySlowTimer',
+      'controlsInvertedTimer', 'emotionSlugTimer', 'bonusHighwayTimer', 'weaponCd', 'attackAnimTimer', 'enemySlowTimer',
     ].forEach(dec);
 
     if (r.nearMissComboTimer > 0) {
@@ -2013,35 +2228,52 @@ export class VoidRunEngine {
     r.squashX += (1 - r.squashX) * Math.min(1, rawDt * 14);
     r.squashY += (1 - r.squashY) * Math.min(1, rawDt * 14);
 
-    // Animate Player Mesh (Supports both 2.5D Articulated Source-Image Rig & Procedural 3D Allies!)
+    // Animate Player Mesh (Volumetric 10-Part Source-Image Skeletal Rig + 3-Phase Weapon Attacks & Procedural 3D Allies!)
     const pm = this.playerMesh;
     const ud = pm.userData;
-    pm.position.set(r.x, r.y, 0);
-    const runCycle = now * 0.017 * (r.speed / 12);
+    const isAttacking = r.attackAnimTimer > 0;
+    const atkDur = r.attackAnimDuration || 0.52;
+    const atkP = isAttacking ? Math.max(0, Math.min(1, 1 - r.attackAnimTimer / atkDur)) : 0;
+    // Dynamic forward lunge on attack Phase 2!
+    const lungeZ = isAttacking && atkP > 0.2 && atkP < 0.72
+      ? -0.44 * Math.sin(((atkP - 0.2) / 0.52) * Math.PI)
+      : 0;
+    pm.position.set(r.x, r.y, lungeZ);
+
+    const runCycle = now * 0.0175 * (r.speed / 12);
     const phased = r.voidwalkTimer > 0 || r.voidDomainTimer > 0 || r.eclipseVeilTimer > 0;
+
+    // Rhythmic footfall dust/spark puffs on the track each time a boot plants!
+    if (!r.isJumping && r.slideTimer <= 0 && !saveManager.data.settings.reducedMotion) {
+      const curSign = Math.sin(runCycle) >= 0 ? 1 : -1;
+      if (curSign !== r.lastStrideSign) {
+        r.lastStrideSign = curSign;
+        const footPos = new THREE.Vector3(r.x + curSign * 0.22, 0.08, 0.12);
+        this.spawnVfxBurst(footPos, this.getCurrentWorld().accent, 2);
+      }
+    }
 
     if (ud.isSpriteRig) {
       const bankDiff = r.targetX - r.x;
       const isBanking = Math.abs(bankDiff) > 0.22;
-      const isStriking = r.weaponCd > r.gear.weapon.cd - 0.26;
+      const isStriking = isAttacking && r.attackType !== 'cast';
       const useSkel = !!ud.skeletalReady;
 
-      // Always keep our live 10-part articulated skeletal back rig active during gameplay!
       ud.frontPlane.visible = false;
       ud.sidePlane.visible = false;
       ud.backRunGroup.visible = true;
       ud.skelGroup.visible = useSkel;
       ud.backFullPlane.visible = !useSkel;
 
-      // Kinetic holographic afterimages during lane dashes, strikes & speed bursts!
-      if ((isBanking || isStriking || r.surgeTimer > 0 || r.voidlightTimer > 0) && !saveManager.data.settings.reducedMotion) {
+      // Kinetic holographic afterimages during lane dashes, attacks & speed bursts!
+      if ((isBanking || isAttacking || r.surgeTimer > 0 || r.voidlightTimer > 0) && !saveManager.data.settings.reducedMotion) {
         r.afterimageTick = (r.afterimageTick || 0) + rawDt;
         if (r.afterimageTick >= 0.065) {
           r.afterimageTick = 0;
           const tex = isBanking ? ud.sidePlane.material.map : ud.backFullPlane.material.map;
           const ghostMat = new THREE.MeshBasicMaterial({
             map: tex,
-            color: isStriking ? 0x3dff7a : (r.trailData?.color || 0x00e5ff),
+            color: isAttacking ? (r.gear.weapon?.color || 0x4cf3ff) : (r.trailData?.color || 0x00e5ff),
             transparent: true,
             opacity: 0.42,
             alphaTest: 0.08,
@@ -2056,113 +2288,204 @@ export class VoidRunEngine {
         }
       }
 
+      // Reset attack VFX overlays by default
+      if (ud.slashArcMesh) ud.slashArcMesh.visible = false;
+      if (ud.castRingMesh) ud.castRingMesh.visible = false;
+
       if (useSkel) {
-        // === TRUE MULTI-JOINT RUNNING MOTION: TORSO, HEAD, ARMS/HANDS & 2-SEGMENT LEGS ===
+        // === TRUE VOLUMETRIC RUNNING GAIT + 3-PHASE WEAPON ATTACK CHOREOGRAPHY ===
         const s = Math.sin(runCycle);
         const c = Math.cos(runCycle);
         const speedNorm = Math.max(0, Math.min(1, (r.speed - 11) / 14));
 
-        // Reset shared body scale & subtle 3D bank twist into lane changes
         ud.bodyPivot.position.y = 0;
         ud.bodyPivot.rotation.set(0, -bankDiff * 0.34, -bankDiff * 0.26);
         ud.bodyPivot.scale.set(r.squashX, r.squashY, 1);
 
+        // 1) BASE LOWER BODY & SPRINT GAIT (Runs continuously even during upper-body weapon slashes!)
         if (r.slideTimer > 0) {
-          // Low athletic power-slide: hips drop, torso leans back, arms flare out for balance, legs extend!
-          ud.hipsPivot.position.y = ud.hipBaseY * 0.46;
+          ud.hipsPivot.position.set(0, ud.hipBaseY * 0.46, 0);
           ud.hipsPivot.rotation.set(0, 0, -bankDiff * 0.16);
-          ud.torsoPivot.rotation.set(0.58, 0, 0);
-          ud.headPivot.rotation.set(-0.35, 0, 0);
+          ud.torsoPivot.rotation.set(0.55, 0, 0);
+          ud.headPivot.rotation.set(-0.32, 0, 0);
 
-          ud.lShoulderPivot.rotation.set(-0.35, 0, 0.12);
-          ud.lElbowPivot.rotation.set(-0.45, 0, -0.15);
-          ud.rShoulderPivot.rotation.set(-0.35, 0, -0.12);
-          ud.rElbowPivot.rotation.set(-0.45, 0, 0.15);
+          ud.lShoulderPivot.position.z = -0.02;
+          ud.rShoulderPivot.position.z = -0.02;
+          ud.lShoulderPivot.rotation.set(-0.28, 0, 0.14);
+          ud.lElbowPivot.rotation.set(-0.32, 0, -0.15);
+          ud.rShoulderPivot.rotation.set(-0.28, 0, -0.14);
+          ud.rElbowPivot.rotation.set(-0.32, 0, 0.15);
 
-          ud.lHipPivot.position.y = 0;
-          ud.rHipPivot.position.y = 0;
-          ud.lHipPivot.rotation.set(-1.1, 0, 0.08);
+          ud.lHipPivot.position.set(ud.lHipPivot.position.x, 0, -0.015);
+          ud.rHipPivot.position.set(ud.rHipPivot.position.x, 0, -0.015);
+          ud.lHipPivot.rotation.set(-0.62, 0, 0.08);
           ud.lKneePivot.rotation.set(0.25, 0, 0);
-          ud.lHipPivot.scale.y = 0.85;
-          ud.lKneePivot.scale.y = 0.85;
-          ud.rHipPivot.rotation.set(-0.55, 0, -0.12);
-          ud.rKneePivot.rotation.set(1.1, 0, 0);
-          ud.rHipPivot.scale.y = 0.85;
-          ud.rKneePivot.scale.y = 0.72;
+          ud.lHipPivot.scale.y = 0.86;
+          ud.lKneePivot.scale.y = 0.86;
+          ud.rHipPivot.rotation.set(-0.35, 0, -0.12);
+          ud.rKneePivot.rotation.set(0.75, 0, 0);
+          ud.rHipPivot.scale.y = 0.86;
+          ud.rKneePivot.scale.y = 0.78;
         } else if (r.isJumping) {
-          // Dynamic airborne vault: arms throw up/forward, front knee drives high, trailing leg kicks back!
-          ud.hipsPivot.position.y = ud.hipBaseY + 0.06;
-          ud.hipsPivot.rotation.set(0, 0.12, -bankDiff * 0.18);
-          ud.torsoPivot.rotation.set(-0.22, -0.14, 0);
+          ud.hipsPivot.position.set(0, ud.hipBaseY + 0.08, 0);
+          ud.hipsPivot.rotation.set(0, 0.14, -bankDiff * 0.18);
+          ud.torsoPivot.rotation.set(-0.24, -0.14, 0);
           ud.headPivot.rotation.set(0.14, 0.08, 0);
 
-          // Both arms drive up & forward cleanly
-          ud.lShoulderPivot.rotation.set(-1.05, 0, 0.34);
-          ud.lElbowPivot.rotation.set(-0.75, 0, -0.22);
-          ud.rShoulderPivot.rotation.set(-0.75, 0, -0.34);
-          ud.rElbowPivot.rotation.set(-0.85, 0, 0.22);
+          // Arms throw high & wide during vault
+          ud.lShoulderPivot.position.z = -0.08;
+          ud.rShoulderPivot.position.z = -0.08;
+          ud.lShoulderPivot.rotation.set(-0.55, 0, -0.35);
+          ud.lElbowPivot.rotation.set(-0.48, 0, -0.25);
+          ud.rShoulderPivot.rotation.set(-0.45, 0, 0.35);
+          ud.rElbowPivot.rotation.set(-0.52, 0, 0.25);
 
-          // Left knee tucked high, right leg trailing bent
-          ud.lHipPivot.position.y = 0.16;
-          ud.lHipPivot.rotation.set(-0.95, 0, 0.06);
-          ud.lHipPivot.scale.y = 0.88;
-          ud.lKneePivot.rotation.set(1.15, 0, 0);
-          ud.lKneePivot.scale.y = 0.82;
+          // Left knee tucked high, right leg trailing with visible 3D boot heel!
+          ud.lHipPivot.position.y = 0.22;
+          ud.lHipPivot.rotation.set(-0.52, 0, 0.06);
+          ud.lHipPivot.scale.y = 0.84;
+          ud.lKneePivot.rotation.set(0.72, 0, 0);
+          ud.lKneePivot.scale.y = 0.86;
 
-          ud.rHipPivot.position.y = 0.05;
-          ud.rHipPivot.rotation.set(0.42, 0, -0.06);
+          ud.rHipPivot.position.y = 0.06;
+          ud.rHipPivot.rotation.set(0.46, 0, -0.06);
           ud.rHipPivot.scale.y = 0.92;
-          ud.rKneePivot.rotation.set(0.75, 0, 0);
+          ud.rKneePivot.rotation.set(0.85, 0, 0);
           ud.rKneePivot.scale.y = 0.84;
         } else {
-          // === FULL-SPEED ATHLETIC SPRINT CYCLE ===
-          // 1. Hips: rhythmic stride bounce, pelvic sway & hip counter-rotation
-          ud.hipsPivot.position.y = ud.hipBaseY + Math.abs(c) * (0.12 + speedNorm * 0.05);
-          ud.hipsPivot.rotation.set(0, -s * 0.15, s * 0.065);
+          // === FULL-SPEED ATHLETIC RUNNING GAIT ===
+          // Hips: unmistakable springy push-off hop + lateral stride weight shift + pelvis rotation
+          ud.hipsPivot.position.set(s * 0.055, ud.hipBaseY + Math.abs(c) * (0.14 + speedNorm * 0.05), 0);
+          ud.hipsPivot.rotation.set(0, -s * 0.18, s * 0.08);
 
-          // 2. Torso: forward sprint lean + unmistakable shoulder counter-twist opposite to hips!
-          const leanX = r.stumbleTimer > 0 ? 0.24 : (-0.18 - speedNorm * 0.12);
-          const strikeTwist = isStriking ? -0.58 : 0;
-          ud.torsoPivot.rotation.set(leanX, s * 0.28 + strikeTwist, -s * 0.075);
+          // Torso: bold forward sprint lean + strong alternating shoulder counter-twist!
+          const leanX = r.stumbleTimer > 0 ? 0.24 : (-0.22 - speedNorm * 0.12);
+          ud.torsoPivot.rotation.set(leanX, s * 0.34, -s * 0.09);
 
-          // 3. Head: counter-stabilizes gaze forward with gentle stride nod
-          ud.headPivot.rotation.set(0.11 + Math.abs(c) * 0.045, -s * 0.14 - strikeTwist * 0.4, s * 0.03);
+          // Head: stabilizes gaze forward with subtle rhythmic stride nod
+          ud.headPivot.rotation.set(0.14 + Math.abs(c) * 0.05, -s * 0.18, s * 0.04);
 
-          // 4. Arms & Hands: pull A-pose arms INWARD to athletic sides, bend elbows & pump opposite to legs!
-          // Left Arm drives forward when Right Leg drives forward (s < 0 => forward, s > 0 => back)
-          const lArmDrive = -s;
-          ud.lShoulderPivot.rotation.set(lArmDrive * 0.88, 0, 0.56 + Math.max(0, -lArmDrive) * 0.14);
-          ud.lShoulderPivot.position.z = -0.02 + lArmDrive * 0.10;
-          ud.lElbowPivot.rotation.set(-0.92 - Math.max(0, lArmDrive) * 0.52 + Math.max(0, -lArmDrive) * 0.28, 0, -0.18 - lArmDrive * 0.18);
+          // Arms & Hands: tucked cleanly beside ribs (no A-pose!) & visibly pumping UP/BACK and FORWARD!
+          // Kept inside ±0.58 rad X-tilt so volumetric forearms & hands stay bold and readable every frame!
+          const lArmDrive = -s; // Opposite to Left Leg
+          ud.lShoulderPivot.rotation.set(lArmDrive * 0.56, 0, 0.46 - lArmDrive * 0.18);
+          ud.lShoulderPivot.position.z = -0.02 + lArmDrive * 0.16;
+          ud.lElbowPivot.rotation.set(-0.48 - Math.max(0, lArmDrive) * 0.26, 0, -0.22 - lArmDrive * 0.32);
 
-          // Right Arm pumps opposite to Left Arm — or whips forward during Gear Strike!
-          if (isStriking) {
-            ud.rShoulderPivot.rotation.set(-1.38, 0, -0.22);
-            ud.rShoulderPivot.position.z = -0.14;
-            ud.rElbowPivot.rotation.set(-0.32, 0, 0.32);
-          } else {
-            const rArmDrive = s;
-            ud.rShoulderPivot.rotation.set(rArmDrive * 0.88, 0, -0.56 - Math.max(0, -rArmDrive) * 0.14);
-            ud.rShoulderPivot.position.z = -0.02 + rArmDrive * 0.10;
-            ud.rElbowPivot.rotation.set(-0.92 - Math.max(0, rArmDrive) * 0.52 + Math.max(0, -rArmDrive) * 0.28, 0, 0.18 + rArmDrive * 0.18);
-          }
+          const rArmDrive = s; // Opposite to Right Leg
+          ud.rShoulderPivot.rotation.set(rArmDrive * 0.56, 0, -0.46 + rArmDrive * 0.18);
+          ud.rShoulderPivot.position.z = -0.02 + rArmDrive * 0.16;
+          ud.rElbowPivot.rotation.set(-0.48 - Math.max(0, rArmDrive) * 0.26, 0, 0.22 + rArmDrive * 0.32);
 
-          // 5. Left & Right 2-Joint Legs (Hip/Thigh + Knee/Shin/Boot stride & kick-back!)
+          // 2-Joint Legs + 3D Boot Soles: bold knee-drive lift & unmistakable boot kick-back!
           const lFwd = Math.max(0, s);
           const lBack = Math.max(0, -s);
-          ud.lHipPivot.position.y = lFwd * 0.15 + lBack * 0.07;
-          ud.lHipPivot.rotation.set(-s * 0.92, 0, 0.03);
-          ud.lHipPivot.scale.y = 1.0 - lBack * 0.15 - lFwd * 0.06;
-          ud.lKneePivot.rotation.set(0.18 + lBack * 1.18 + Math.max(0, c) * 0.35, 0, 0);
-          ud.lKneePivot.scale.y = 1.0 - lBack * 0.28;
+          ud.lHipPivot.position.y = lFwd * 0.20 + lBack * 0.11;
+          ud.lHipPivot.rotation.set(-s * 0.56, 0, 0.04);
+          ud.lHipPivot.scale.y = 1.0 - lBack * 0.12 - lFwd * 0.08;
+          ud.lKneePivot.rotation.set(0.18 + lBack * 0.92 + Math.max(0, c) * 0.36, 0, 0);
+          ud.lKneePivot.scale.y = 1.0 - lBack * 0.18;
 
           const rFwd = Math.max(0, -s);
           const rBack = Math.max(0, s);
-          ud.rHipPivot.position.y = rFwd * 0.15 + rBack * 0.07;
-          ud.rHipPivot.rotation.set(s * 0.92, 0, -0.03);
-          ud.rHipPivot.scale.y = 1.0 - rBack * 0.15 - rFwd * 0.06;
-          ud.rKneePivot.rotation.set(0.18 + rBack * 1.18 + Math.max(0, -c) * 0.35, 0, 0);
-          ud.rKneePivot.scale.y = 1.0 - rBack * 0.28;
+          ud.rHipPivot.position.y = rFwd * 0.20 + rBack * 0.11;
+          ud.rHipPivot.rotation.set(s * 0.56, 0, -0.04);
+          ud.rHipPivot.scale.y = 1.0 - rBack * 0.12 - rFwd * 0.08;
+          ud.rKneePivot.rotation.set(0.18 + rBack * 0.92 + Math.max(0, -c) * 0.36, 0, 0);
+          ud.rKneePivot.scale.y = 1.0 - rBack * 0.18;
+        }
+
+        // 2) UPPER-BODY 3-PHASE HERO ATTACK OVERRIDE (Wind-up -> Explosive Lunge & Slash -> Recovery!)
+        if (ud.rWeaponMesh) {
+          ud.rWeaponMesh.scale.setScalar(isAttacking ? 1.24 : 0.88);
+          ud.rWeaponMesh.rotation.set(-0.85, 0, -0.35);
+        }
+        if (ud.lWeaponMesh) {
+          ud.lWeaponMesh.scale.setScalar(isAttacking ? 1.24 : 0.88);
+        }
+
+        if (isAttacking) {
+          const dir = r.attackComboSide || 1;
+          // Smooth 3-phase curve: windup (0..0.24), active slash (0.24..0.68), recovery (0.68..1.0)
+          let swing = 0; // -1 = wound up back, +1 = whipped through forward
+          let slashVis = false;
+          let slashProg = 0;
+          if (atkP < 0.24) {
+            swing = -(atkP / 0.24);
+          } else if (atkP < 0.68) {
+            slashProg = (atkP - 0.24) / 0.44;
+            swing = -1 + 2 * (1 - Math.pow(1 - slashProg, 3));
+            slashVis = true;
+          } else {
+            const rec = (atkP - 0.68) / 0.32;
+            swing = 1 - rec;
+          }
+
+          if (r.attackType === 'slam') {
+            // BRANN KEST: Two-handed Overhead Warhammer Power Slam!
+            ud.torsoPivot.rotation.x = -0.18 + swing * 0.46;
+            ud.torsoPivot.rotation.y = -0.22 * swing;
+            ud.rShoulderPivot.rotation.set(-0.55 + swing * 0.85, 0, 1.05 - swing * 1.35);
+            ud.rElbowPivot.rotation.set(-0.35, 0, 0.25 - swing * 0.3);
+            ud.lShoulderPivot.rotation.set(-0.45 + swing * 0.75, 0, -0.85 + swing * 1.15);
+            ud.lElbowPivot.rotation.set(-0.35, 0, -0.25);
+            if (ud.rWeaponMesh) ud.rWeaponMesh.rotation.set(-0.3 + swing * 1.15, 0, 0);
+          } else if (r.attackType === 'twin') {
+            // NYX ADERYN: Blistering X-Cross Twin-Fang Double-Hand Slash!
+            ud.torsoPivot.rotation.x = -0.34;
+            ud.torsoPivot.rotation.y = swing * 0.45 * dir;
+            ud.rShoulderPivot.rotation.set(-0.45 - swing * 0.35, 0, -0.85 + swing * 1.45);
+            ud.rElbowPivot.rotation.set(-0.35, 0, -0.45 + swing * 0.95);
+            ud.lShoulderPivot.rotation.set(-0.45 - swing * 0.35, 0, 0.85 - swing * 1.45);
+            ud.lElbowPivot.rotation.set(-0.35, 0, 0.45 - swing * 0.95);
+          } else if (r.attackType === 'thrust') {
+            // ELARA VEY: Arcane Runic Staff Sweep & Energy Burst Thrust!
+            ud.torsoPivot.rotation.x = -0.28;
+            ud.torsoPivot.rotation.y = -0.58 * swing;
+            ud.rShoulderPivot.rotation.set(-0.62, 0, 0.25 - swing * 0.85);
+            ud.rElbowPivot.rotation.set(-0.22, 0, 0.35 - swing * 0.65);
+            ud.lShoulderPivot.rotation.set(-0.35, 0, 0.35);
+            if (ud.castRingMesh && slashVis) {
+              ud.castRingMesh.visible = true;
+              const cs = 0.6 + slashProg * 1.1;
+              ud.castRingMesh.scale.set(cs, cs, 1);
+              ud.castRingMesh.rotation.z = slashProg * 4.5;
+            }
+          } else if (r.attackType === 'cast') {
+            // VOID POWER CAST: Dramatic Forward Arm Thrust + Expanding Holographic Sigil Ring!
+            ud.torsoPivot.rotation.x = -0.28;
+            ud.torsoPivot.rotation.y = -0.42 * swing;
+            ud.rShoulderPivot.rotation.set(-0.68, 0, -0.15);
+            ud.rElbowPivot.rotation.set(-0.2, 0, 0.15);
+            ud.lShoulderPivot.rotation.set(-0.55, 0, 0.22);
+            if (ud.castRingMesh) {
+              ud.castRingMesh.visible = true;
+              const cs = 0.55 + atkP * 1.35;
+              ud.castRingMesh.scale.set(cs, cs, 1);
+              ud.castRingMesh.rotation.z = atkP * 5.2;
+              ud.castRingMesh.material.opacity = Math.max(0, 1 - atkP * 0.9);
+            }
+          } else {
+            // MILLER REDWOLF & SWORD COMBO: Wide 180° Forehand / Backhand Void Blade Slash!
+            ud.torsoPivot.rotation.x = -0.28;
+            ud.torsoPivot.rotation.y = -swing * 0.82 * dir;
+            ud.torsoPivot.rotation.z = -swing * 0.16 * dir;
+            ud.rShoulderPivot.rotation.set(-0.55, 0, (dir > 0 ? 0.65 - swing * 1.45 : -0.75 + swing * 1.35));
+            ud.rElbowPivot.rotation.set(-0.28, 0, -swing * 0.65 * dir);
+            ud.lShoulderPivot.rotation.set(0.32, 0, 0.55);
+            if (ud.rWeaponMesh) ud.rWeaponMesh.rotation.set(-0.5, 0, -0.9 * swing * dir);
+          }
+
+          // Sweep glowing 3D Crescent Blade Slash Ribbon across the attack arc!
+          if (ud.slashArcMesh && slashVis && r.attackType !== 'cast') {
+            ud.slashArcMesh.visible = true;
+            ud.slashArcMat.color.setHex(r.gear.weapon?.color || 0x4cf3ff);
+            ud.slashArcMat.opacity = Math.sin(slashProg * Math.PI) * 0.92;
+            const sc = 0.85 + slashProg * 0.45;
+            ud.slashArcMesh.scale.set(sc * dir, sc, 1);
+            ud.slashArcMesh.rotation.z = (-0.9 + slashProg * 2.4) * dir;
+            ud.slashArcMesh.rotation.x = r.attackType === 'slam' ? 0.15 : Math.PI * 0.44;
+          }
         }
       } else {
         // Brief fallback animation while sprite image loads (<2ms)
@@ -2175,23 +2498,29 @@ export class VoidRunEngine {
         m.opacity = phased ? 0.45 : 1.0;
         if (r.stumbleTimer > 0) m.color.setHex(0xff7788);
         else if (r.enemySlowTimer > 0) m.color.setHex(0xff99ee);
-        else if (isStriking) m.color.setHex(0xbefeff);
+        else if (isStriking) m.color.setHex(0xc8ffff);
         else m.color.set(ud.baseTint);
       }
     } else {
+      // Procedural 3D Ally Runners: enhanced sprint bounce + torso counter-twist + full attack slash!
+      const s = Math.sin(runCycle);
+      const c = Math.cos(runCycle);
       if (r.slideTimer > 0) {
+        ud.bodyPivot.position.y = 0;
         ud.bodyPivot.scale.set(1.12, 0.48, 1.08);
-        ud.bodyPivot.rotation.x = -0.38;
+        ud.bodyPivot.rotation.set(-0.38, 0, (r.x - r.targetX) * 0.25);
       } else {
+        ud.bodyPivot.position.y = r.isJumping ? 0 : Math.abs(c) * 0.13;
         ud.bodyPivot.scale.set(r.squashX, r.squashY, 1);
-        ud.bodyPivot.rotation.x = r.stumbleTimer > 0 ? 0.3 : 0.12;
-        ud.legL.rotation.x = r.isJumping ? 0.55 : Math.sin(runCycle) * 0.9;
-        ud.legR.rotation.x = r.isJumping ? -0.45 : -Math.sin(runCycle) * 0.9;
-        ud.armL.rotation.x = -Math.sin(runCycle) * 0.8;
-        ud.armR.rotation.x = Math.sin(runCycle) * 0.8;
+        const atkTwist = isAttacking ? Math.sin(atkP * Math.PI) * 0.95 * (r.attackComboSide || 1) : 0;
+        ud.bodyPivot.rotation.set(r.stumbleTimer > 0 ? 0.3 : 0.18, s * 0.22 - atkTwist, (r.x - r.targetX) * 0.32);
+        ud.legL.rotation.x = r.isJumping ? 0.65 : s * 1.05;
+        ud.legR.rotation.x = r.isJumping ? -0.55 : -s * 1.05;
+        ud.armL.rotation.x = isAttacking ? 0.5 : -s * 0.95;
+        ud.armR.rotation.x = isAttacking ? (-1.45 + atkP * 2.2) : s * 0.95;
+        ud.armR.rotation.z = isAttacking ? -0.65 * Math.sin(atkP * Math.PI) : 0;
       }
-      ud.bodyPivot.rotation.z = (r.x - r.targetX) * 0.32;
-      if (ud.scarf) ud.scarf.rotation.x = 0.45 + Math.sin(runCycle * 1.4) * 0.25;
+      if (ud.scarf) ud.scarf.rotation.x = 0.45 + Math.sin(runCycle * 1.4) * 0.28;
       ud.matBody.transparent = phased;
       ud.matBody.opacity = phased ? 0.42 : 1.0;
     }
@@ -2489,8 +2818,8 @@ export class VoidRunEngine {
       shakeX = (Math.random() - 0.5) * r.cameraShake;
       shakeY = (Math.random() - 0.5) * r.cameraShake;
     }
-    this.camera.position.set(r.x * 0.44 + shakeX, 4.1 + r.y * 0.24 + shakeY, 6.15);
-    this.camera.lookAt(r.x * 0.24, 1.35 + r.y * 0.15, -12.5);
+    this.camera.position.set(r.x * 0.44 + shakeX, 3.65 + r.y * 0.24 + shakeY, 5.55);
+    this.camera.lookAt(r.x * 0.24, 1.25 + r.y * 0.15, -12.0);
 
     // Active Power-Up Countdown Pills for HUD
     const activeBuffs = [];
