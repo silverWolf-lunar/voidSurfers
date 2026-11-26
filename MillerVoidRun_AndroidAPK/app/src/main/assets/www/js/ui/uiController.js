@@ -24,8 +24,11 @@ import {
   getHeroLevelBonuses,
   getCodexStageInfo,
   getUnlockedSlots,
+  resolveCharacterArt,
 } from '../config/gameData.js';
 import { saveManager, getDailySeedNumber } from '../core/saveManager.js';
+import { slotManager } from '../core/slotManager.js';
+import { MOTION_SCENES } from '../config/motionLibrary.js';
 import { audioEngine } from '../core/audioEngine.js';
 import { NativeBridge, SERVICE_CONFIG } from '../config/servicesConfig.js';
 import { VoidRunEngine } from '../game/engine.js';
@@ -34,7 +37,9 @@ const $ = (id) => document.getElementById(id);
 
 class UIController {
   constructor() {
+    slotManager.ensureValid(true);
     this.currentScreen = 'splash';
+    this.selectedSlotIdx = slotManager.getActiveSlotIndex();
     this.selectedCharIdx = Math.max(0, CHARACTERS.findIndex((c) => c.id === saveManager.data.selectedChar));
     this.activeCustTab = 'runners';
     this.csViewMode = 'front';
@@ -116,6 +121,8 @@ class UIController {
       if (this.pendingChallenge) this.openChallengePrompt(this.pendingChallenge);
       this.checkHealthyPlayReminder();
     } else if (screenName === 'charselect') {
+      slotManager.ensureValid(false);
+      this.selectedSlotIdx = slotManager.getActiveSlotIndex();
       this.selectedCharIdx = Math.max(0, CHARACTERS.findIndex((c) => c.id === saveManager.data.selectedChar));
       this.renderCharSelect();
     } else if (screenName === 'loadout') {
@@ -325,14 +332,19 @@ class UIController {
     if ($('cust-vs-pill')) $('cust-vs-pill').textContent = `${d.vs.toLocaleString()} 🔮`;
     if ($('cs-vs-pill')) $('cs-vs-pill').textContent = `${d.vs.toLocaleString()} 🔮`;
 
-    // Sync active runner portrait across Menu, Loadout & HUD
-    const curChar = CHARACTERS.find((c) => c.id === d.selectedChar) || CHARACTERS[0];
-    const portraitSrc = curChar.portrait || 'assets/art/characters/miller_portrait.jpg';
+    // Sync active runner portrait & active slot badge across Menu, Loadout & HUD
+    slotManager.ensureValid(false);
+    const activeSlot = slotManager.getActiveSlot();
+    const curChar = activeSlot?.character || CHARACTERS.find((c) => c.id === d.selectedChar) || CHARACTERS[0];
+    const curSkin = SKINS.find((s) => s.id === d.selectedSkin);
+    const artKey = curSkin?.charArtOverride?.[curChar.id] || null;
+    const effectiveArt = artKey ? resolveCharacterArt(curChar.id, true, artKey) : curChar;
+    const portraitSrc = effectiveArt.portrait || 'assets/art/characters/miller_portrait.jpg';
     ['menu-hero-avatar', 'loadout-hero-avatar', 'hud-hero-avatar'].forEach((id) => {
       const img = $(id);
       if (img) img.src = portraitSrc;
     });
-    if ($('hud-callsign')) $('hud-callsign').textContent = curChar.name.split(' ')[0].toUpperCase();
+    if ($('hud-callsign')) $('hud-callsign').textContent = `S${activeSlot.slotNumber} · ${curChar.name.split(' ')[0].toUpperCase()}`;
   }
 
   renderMenuBadges() {
@@ -390,17 +402,28 @@ class UIController {
   }
 
   renderCharSelect() {
+    slotManager.ensureValid(false);
     const d = saveManager.data;
+    const slots = slotManager.getSlots();
+    if (this.selectedSlotIdx < 0 || this.selectedSlotIdx >= slots.length) {
+      this.selectedSlotIdx = slotManager.getActiveSlotIndex();
+    }
+    const targetSlot = slots[this.selectedSlotIdx];
     const c = CHARACTERS[this.selectedCharIdx] || CHARACTERS[0];
     const unlocked = d.unlockedChars.includes(c.id);
-    const equipped = d.selectedChar === c.id;
+    const charSlotNum = slotManager.getSlotNumberForCharacter(c.id);
+    const activeSlot = slotManager.getActiveSlot();
+    const isEquippedActive = activeSlot?.charId === c.id;
+    const curSkin = SKINS.find((s) => s.id === d.selectedSkin);
+    const artKey = curSkin?.charArtOverride?.[c.id] || null;
+    const effectiveArt = artKey ? resolveCharacterArt(c.id, true, artKey) : c;
 
     // Keep live 3D runner synced in background too
     this.engine.refreshMenuCharacter(c.id, d.selectedSkin);
 
-    // Update splash art backdrop (falls back to key art for unlockable GDD allies)
+    // Update splash art backdrop (falls back to key art for procedural bench allies)
     const bgImg = $('cs-bg-splash');
-    bgImg.src = c.splash || 'assets/art/key_art_poster.jpg';
+    bgImg.src = effectiveArt.splash || 'assets/art/key_art_poster.jpg';
 
     // Update full-body sprite stage: Front/Side/Back show crisp 2D cutouts; Run & Atk run the LIVE 3D 10-part skeletal rig!
     this.stopCharSelectPreview();
@@ -410,13 +433,13 @@ class UIController {
     const viewBar = document.querySelector('.cs-view-bar');
     document.querySelectorAll('[data-cs-view]').forEach((b) => b.classList.toggle('active', b.dataset.csView === this.csViewMode));
 
-    if (c.sprites) {
+    if (effectiveArt.sprites) {
       fallbackEl.classList.add('hidden');
       if (viewBar) viewBar.style.display = 'flex';
       spriteImg.classList.remove('anim-breathe', 'anim-run', 'anim-attack');
 
-      if (this.csViewMode === 'run' || this.csViewMode === 'attack') {
-        // Reveal the REAL LIVE 3D skeletal runner sprinting or attacking right on the Character Select stage!
+      const liveModes = ['run', 'attack', 'roll', 'flip', 'wall', 'climb', 'glide', 'mage', 'shield'];
+      if (liveModes.includes(this.csViewMode)) {
         spriteImg.classList.add('hidden');
         csScreen.classList.add('cs-live-3d');
         this.engine.setMenuPreviewMotion(this.csViewMode, c.id);
@@ -424,7 +447,7 @@ class UIController {
         spriteImg.classList.remove('hidden');
         csScreen.classList.remove('cs-live-3d');
         this.engine.setMenuPreviewMotion('idle', c.id);
-        spriteImg.src = c.sprites[this.csViewMode] || c.sprites.front;
+        spriteImg.src = effectiveArt.sprites[this.csViewMode] || effectiveArt.sprites.front;
         spriteImg.classList.add('anim-breathe');
       }
     } else {
@@ -436,40 +459,125 @@ class UIController {
 
     const splashBtn = $('cs-btn-splash');
     if (splashBtn) {
-      splashBtn.style.display = c.splash ? 'inline-block' : 'none';
-      splashBtn.onclick = () => this.openArtModal(`${c.name} — Hero Splash`, c.splash);
+      splashBtn.style.display = effectiveArt.splash ? 'inline-block' : 'none';
+      splashBtn.onclick = () => this.openArtModal(`${c.name} — Hero Splash`, effectiveArt.splash);
     }
 
-    // Hero Level, smooth XP progress & combat stats
+    // Hero Level, editable config stats & progression
     const hSt = saveManager.getHeroState(c.id);
     const hReq = heroXpForNextLevel(hSt.level);
     const hPct = Math.min(100, Math.round((hSt.xp / hReq) * 100));
     const hBon = getHeroLevelBonuses(hSt.level);
+    const st = c.stats || { speedMult: 1, bonusShields: 0, attackRangeMult: 1, veRegenMult: 1 };
 
     $('cs-name').textContent = c.name;
-    $('cs-badge').classList.toggle('hidden', !c.featured);
-    $('cs-title').textContent = c.title;
+    const badgeEl = $('cs-badge');
+    badgeEl.classList.remove('hidden');
+    badgeEl.textContent = charSlotNum ? `SLOT ${charSlotNum}` : (unlocked ? 'BENCH' : 'LOCKED');
+    badgeEl.className = `pill ${charSlotNum ? 'pill-cyan' : unlocked ? 'pill-gold' : 'pill-red'}`;
+    $('cs-title').textContent = `${c.title} · ${c.faction || 'Guild'}`;
     $('cs-hero-lv').textContent = `Hero Lv ${hSt.level} (${hSt.xp}/${hReq} XP)`;
     $('cs-hero-rank').textContent = hBon.rank;
     $('cs-hero-xp-bar').style.width = `${hPct}%`;
+    if ($('cs-stats-row')) {
+      $('cs-stats-row').innerHTML = `
+        <span class="cs-stat-chip">SPD ${Math.round(st.speedMult * 100)}%</span>
+        <span class="cs-stat-chip">SHD +${st.bonusShields}</span>
+        <span class="cs-stat-chip">ATK ${Math.round(st.attackRangeMult * 100)}%</span>
+        <span class="cs-stat-chip">VE ${Math.round(st.veRegenMult * 100)}%</span>
+      `;
+    }
     $('cs-bonuses').innerHTML = `Bonuses: <strong>+${Math.round((hBon.rangeMult - 1) * 100)}% Strike</strong> · <strong>+${Math.round(hBon.slowResist * 100)}% Slow Resist</strong> · <strong>+${hBon.bonusMaxVE} VE</strong>`;
     $('cs-passive').innerHTML = `<strong>Passive:</strong> ${c.passiveName} — ${c.passiveDesc}`;
     $('cs-sig').innerHTML = `<strong>Signature:</strong> ${c.sigName} — ${c.sigDesc}`;
 
-    // Visual Portrait Roster Cards
+    // Render Unique Player Slots Bar (Slots 1..11 — 1 unique character per slot)
+    const occupiedCount = slots.filter((s) => !s.isEmpty).length;
+    if ($('cs-slot-status')) {
+      $('cs-slot-status').textContent = `PLAYER SLOTS (${occupiedCount}/${slots.length} UNIQUE · TARGET: SLOT ${targetSlot.slotNumber})`;
+    }
+    const slotsBar = $('cs-slots-bar');
+    if (slotsBar) {
+      slotsBar.innerHTML = '';
+      slots.forEach((sl) => {
+        const chip = document.createElement('button');
+        const isSelSlot = sl.index === this.selectedSlotIdx;
+        chip.className = `slot-chip ${sl.isActive ? 'active-slot' : ''} ${isSelSlot ? 'selected-slot' : ''} ${sl.isEmpty ? 'empty-slot' : ''}`;
+        let thumbHtml = '<div class="slot-chip-empty-ico">+</div>';
+        let nameLbl = 'EMPTY';
+        if (sl.character) {
+          const sArtKey = curSkin?.charArtOverride?.[sl.character.id] || null;
+          const sArt = sArtKey ? resolveCharacterArt(sl.character.id, true, sArtKey) : sl.character;
+          thumbHtml = sArt.portrait
+            ? `<img class="slot-chip-img" src="${sArt.portrait}" alt="${sl.character.name}" />`
+            : `<div class="slot-chip-empty-ico">${sl.character.initials}</div>`;
+          nameLbl = sl.character.name.split(' ')[0];
+        }
+        chip.innerHTML = `<span class="slot-chip-num">S${sl.slotNumber}${sl.isActive ? '★' : ''}</span>${thumbHtml}<span class="slot-chip-name">${nameLbl}</span>`;
+        chip.title = sl.character ? `Slot ${sl.slotNumber}: ${sl.character.name}` : `Slot ${sl.slotNumber}: Empty`;
+        chip.onclick = () => {
+          audioEngine.playUiClick();
+          this.selectedSlotIdx = sl.index;
+          if (sl.charId) {
+            const cIdx = CHARACTERS.findIndex((ch) => ch.id === sl.charId);
+            if (cIdx >= 0) this.selectedCharIdx = cIdx;
+            slotManager.setActiveSlot(sl.index);
+            this.refreshStatusBars();
+          }
+          this.renderCharSelect();
+        };
+        slotsBar.appendChild(chip);
+      });
+    }
+
+    const clearBtn = $('cs-btn-clear-slot');
+    if (clearBtn) {
+      clearBtn.onclick = () => {
+        const res = slotManager.clearSlot(this.selectedSlotIdx);
+        if (res.ok) {
+          audioEngine.playUiClick();
+          this.refreshStatusBars();
+          this.renderCharSelect();
+          this.showToast(`Cleared Slot ${this.selectedSlotIdx + 1}`);
+        } else {
+          this.showToast(res.message);
+        }
+      };
+    }
+    const resetBtn = $('cs-btn-reset-slots');
+    if (resetBtn) {
+      resetBtn.onclick = () => {
+        slotManager.resetDefaultSlots();
+        this.selectedSlotIdx = 0;
+        this.selectedCharIdx = 0;
+        audioEngine.playEssence();
+        this.refreshStatusBars();
+        this.renderCharSelect();
+        this.showToast('↻ Restored all 11 unique default slots!');
+      };
+    }
+
+    // Visual Portrait Roster Cards (each tagged with its unique Slot # or Bench/Locked)
     const roster = $('cs-roster');
     roster.innerHTML = '';
     CHARACTERS.forEach((ch, idx) => {
       const isUnlocked = d.unlockedChars.includes(ch.id);
-      const isEquipped = d.selectedChar === ch.id;
+      const isEquipped = activeSlot?.charId === ch.id;
       const isSelected = idx === this.selectedCharIdx;
+      const sNum = slotManager.getSlotNumberForCharacter(ch.id);
+      const chArtKey = curSkin?.charArtOverride?.[ch.id] || null;
+      const chArt = chArtKey ? resolveCharacterArt(ch.id, true, chArtKey) : ch;
+
       const card = document.createElement('button');
       card.className = `cs-card ${isSelected ? 'selected' : ''} ${isEquipped ? 'equipped' : ''} ${!isUnlocked ? 'locked' : ''}`;
-      const thumb = ch.portrait
-        ? `<img class="cs-card-thumb" src="${ch.portrait}" alt="${ch.name}" />`
+      const slotTag = sNum
+        ? `<span class="cs-card-slot-pill">S${sNum}</span>`
+        : (isUnlocked ? '<span class="cs-card-slot-pill bench">BENCH</span>' : '');
+      const thumb = chArt.portrait
+        ? `<img class="cs-card-thumb" src="${chArt.portrait}" alt="${ch.name}" />`
         : `<div class="cs-card-init">${ch.initials}</div>`;
       const firstName = ch.name.split(' ')[0];
-      card.innerHTML = `${thumb}<div class="cs-card-label">${isUnlocked ? firstName : `🔒 ${firstName}`}</div>`;
+      card.innerHTML = `${slotTag}${thumb}<div class="cs-card-label">${isUnlocked ? firstName : `🔒 ${firstName}`}</div>`;
       card.onclick = () => {
         audioEngine.playUiClick();
         this.selectedCharIdx = idx;
@@ -478,68 +586,176 @@ class UIController {
       roster.appendChild(card);
     });
 
-    // Equip / Unlock + Instant Play CTA
+    // Slot Assign / Swap / Unlock + Instant Play CTA
     const equipBtn = $('cs-btn-equip');
     const playBtn = $('cs-btn-play');
-    if (equipped) {
-      equipBtn.className = 'btn btn-sm';
-      equipBtn.textContent = '✅ EQUIPPED';
-      equipBtn.onclick = () => this.showToast(`${c.name} is ready to run!`);
-      playBtn.className = 'btn btn-primary btn-sm';
-      playBtn.textContent = `▶ PLAY ${c.name.split(' ')[0].toUpperCase()}`;
-      playBtn.onclick = () => {
-        audioEngine.playUiClick();
-        this.startStandardRun({ worldId: saveManager.data.selectedWorld });
-      };
-    } else if (unlocked) {
+    const shortName = c.name.split(' ')[0].toUpperCase();
+
+    if (!unlocked) {
       equipBtn.className = 'btn btn-gold btn-sm';
-      equipBtn.textContent = '✓ SELECT RUNNER';
+      equipBtn.textContent = `🔓 ${c.costVS.toLocaleString()} VS${c.costBC ? ` + ${c.costBC} BC` : ''}`;
       equipBtn.onclick = () => {
-        d.selectedChar = c.id;
-        saveManager.save();
-        audioEngine.playEssence();
-        this.refreshStatusBars();
-        this.renderCharSelect();
-        this.showToast(`👤 Equipped ${c.name}!`);
+        if (saveManager.unlockCharacter(c.id)) {
+          slotManager.assignCharacter(this.selectedSlotIdx, c.id, { mode: 'swap', activate: true });
+          audioEngine.playAchievement();
+          this.refreshStatusBars();
+          this.renderCharSelect();
+          this.showToast(`🎉 Unlocked ${c.name} → Slot ${this.selectedSlotIdx + 1}!`);
+        } else {
+          this.showToast(`Locked: requires Codex Lv ${c.reqLv}, ${c.costVS} VS${c.costBC ? ` & ${c.costBC} BC` : ''}`);
+        }
       };
+      playBtn.className = 'btn btn-sm';
+      playBtn.textContent = `🔒 Lv ${c.reqLv}`;
+      playBtn.onclick = () => this.showToast(`Unlock ${c.name} before assigning to a slot!`);
+    } else if (targetSlot.charId === c.id) {
+      // Selected character is already inside selectedSlotIdx
+      if (isEquippedActive) {
+        equipBtn.className = 'btn btn-sm';
+        equipBtn.textContent = `✅ SLOT ${targetSlot.slotNumber} ACTIVE`;
+        equipBtn.onclick = () => this.showToast(`Slot ${targetSlot.slotNumber} (${c.name}) is ready!`);
+      } else {
+        equipBtn.className = 'btn btn-gold btn-sm';
+        equipBtn.textContent = `✓ ACTIVATE SLOT ${targetSlot.slotNumber}`;
+        equipBtn.onclick = () => {
+          slotManager.setActiveSlot(this.selectedSlotIdx);
+          audioEngine.playEssence();
+          this.refreshStatusBars();
+          this.renderCharSelect();
+          this.showToast(`👤 Active Runner: Slot ${targetSlot.slotNumber} (${c.name})`);
+        };
+      }
       playBtn.className = 'btn btn-primary btn-sm';
-      playBtn.textContent = `▶ PLAY ${c.name.split(' ')[0].toUpperCase()}`;
+      playBtn.textContent = `▶ PLAY ${shortName}`;
       playBtn.onclick = () => {
-        d.selectedChar = c.id;
-        saveManager.save();
+        slotManager.setActiveSlot(this.selectedSlotIdx);
         audioEngine.playUiClick();
         this.refreshStatusBars();
         this.startStandardRun({ worldId: saveManager.data.selectedWorld });
       };
     } else {
+      // Assigning c into targetSlot: swap atomically if c already owns another slot, else place from bench
+      const actionLbl = charSlotNum
+        ? `⇄ SWAP S${charSlotNum} ↔ S${targetSlot.slotNumber}`
+        : `+ ASSIGN TO SLOT ${targetSlot.slotNumber}`;
       equipBtn.className = 'btn btn-gold btn-sm';
-      equipBtn.textContent = `🔓 ${c.costVS.toLocaleString()} VS${c.costBC ? ` + ${c.costBC} BC` : ''}`;
+      equipBtn.textContent = actionLbl;
       equipBtn.onclick = () => {
-        if (saveManager.unlockCharacter(c.id)) {
-          audioEngine.playAchievement();
+        const res = slotManager.assignCharacter(this.selectedSlotIdx, c.id, { mode: 'swap', activate: true });
+        if (res.ok) {
+          audioEngine.playEssence();
           this.refreshStatusBars();
           this.renderCharSelect();
-          this.showToast(`🎉 Unlocked & Equipped ${c.name}!`);
+          if (res.action === 'swapped') {
+            this.showToast(`⇄ Swapped ${c.name} into Slot ${targetSlot.slotNumber} (was Slot ${res.swappedWithSlot + 1})`);
+          } else {
+            this.showToast(`✅ Assigned ${c.name} to Slot ${targetSlot.slotNumber}!`);
+          }
         } else {
-          this.showToast(`Requires Codex Lv ${c.reqLv}, ${c.costVS} VS${c.costBC ? ` & ${c.costBC} BC` : ''}`);
+          this.showToast(res.message);
         }
       };
-      playBtn.className = 'btn btn-sm';
-      playBtn.textContent = `🔒 Lv ${c.reqLv}`;
-      playBtn.onclick = () => this.showToast(`Unlock ${c.name} first!`);
+      playBtn.className = 'btn btn-primary btn-sm';
+      playBtn.textContent = charSlotNum ? `▶ PLAY S${charSlotNum} ${shortName}` : `▶ ASSIGN & PLAY`;
+      playBtn.onclick = () => {
+        if (charSlotNum) {
+          slotManager.setActiveSlot(charSlotNum - 1);
+        } else {
+          slotManager.assignCharacter(this.selectedSlotIdx, c.id, { mode: 'swap', activate: true });
+        }
+        audioEngine.playUiClick();
+        this.refreshStatusBars();
+        this.startStandardRun({ worldId: saveManager.data.selectedWorld });
+      };
     }
   }
 
   // --- LOADOUT ---
   renderLoadout() {
+    slotManager.ensureValid(false);
     const d = saveManager.data;
     const slots = getUnlockedSlots(d.codexLevel);
-    const charData = CHARACTERS.find((c) => c.id === d.selectedChar);
-    const heroSt = saveManager.getHeroState(d.selectedChar);
+    const playerSlots = slotManager.getSlots();
+    const activeSlot = slotManager.getActiveSlot();
+    const charData = activeSlot.character || CHARACTERS.find((c) => c.id === d.selectedChar) || CHARACTERS[0];
+    const heroSt = saveManager.getHeroState(charData.id);
     const heroBonus = getHeroLevelBonuses(heroSt.level);
     const gear = saveManager.getEquippedGear();
+    if ($('loadout-slot-pill')) $('loadout-slot-pill').textContent = `SLOT ${activeSlot.slotNumber}`;
     $('loadout-char-label').textContent = `${charData.name} · Hero Lv ${heroSt.level} (${heroBonus.rank})`;
     $('loadout-style-label').textContent = `Gear: ${gear.weapon.icon} ${gear.weapon.name} · ${gear.armor.icon} ${gear.armor.name} · ${gear.relic.icon} ${gear.relic.name}`;
+
+    // Quick-switch Player Slots strip (only occupied unique slots selectable; empty slots open manager)
+    const lsStrip = $('loadout-slots-strip');
+    if (lsStrip) {
+      lsStrip.innerHTML = '';
+      const curSkin = SKINS.find((s) => s.id === d.selectedSkin);
+      playerSlots.forEach((sl) => {
+        const chip = document.createElement('button');
+        chip.className = `slot-chip ${sl.isActive ? 'active-slot' : ''} ${sl.isEmpty ? 'empty-slot' : ''}`;
+        let thumbHtml = '<div class="slot-chip-empty-ico">+</div>';
+        let nameLbl = 'EMPTY';
+        if (sl.character) {
+          const sArtKey = curSkin?.charArtOverride?.[sl.character.id] || null;
+          const sArt = sArtKey ? resolveCharacterArt(sl.character.id, true, sArtKey) : sl.character;
+          thumbHtml = sArt.portrait
+            ? `<img class="slot-chip-img" src="${sArt.portrait}" alt="${sl.character.name}" />`
+            : `<div class="slot-chip-empty-ico">${sl.character.initials}</div>`;
+          nameLbl = sl.character.name.split(' ')[0];
+        }
+        chip.innerHTML = `<span class="slot-chip-num">S${sl.slotNumber}</span>${thumbHtml}<span class="slot-chip-name">${nameLbl}</span>`;
+        chip.onclick = () => {
+          audioEngine.playUiClick();
+          if (sl.isEmpty) {
+            this.selectedSlotIdx = sl.index;
+            this.goTo('charselect');
+            return;
+          }
+          slotManager.setActiveSlot(sl.index);
+          this.refreshStatusBars();
+          this.renderLoadout();
+        };
+        lsStrip.appendChild(chip);
+      });
+    }
+
+    // Render Aligned In-Run Motion Set-Piece Scene Selector (Auto-Rotate All 8 or Lock Specific Scene!)
+    const msGrid = $('loadout-motion-scenes');
+    if (msGrid) {
+      msGrid.innerHTML = '';
+      const curSceneId = d.selectedMotionScene || 'auto';
+      const allOptions = [
+        {
+          id: 'auto',
+          icon: '🔄',
+          name: 'Auto-Rotate All 8 Motion Set-Pieces',
+          subtitle: 'Dynamic Locomotion · Roll · Flip · Wall-Run · Climb · Paraglider · Mage · Sword & Shield',
+        },
+        ...MOTION_SCENES,
+      ];
+      allOptions.forEach((sc) => {
+        const active = curSceneId === sc.id;
+        const btn = document.createElement('button');
+        btn.className = `list-item ${active ? 'active-item' : ''}`;
+        btn.style.width = '100%';
+        btn.style.textAlign = 'left';
+        btn.innerHTML = `
+          <div style="font-size:20px;width:30px;text-align:center">${sc.icon}</div>
+          <div style="flex:1">
+            <strong style="color:${active ? '#4CF3FF' : '#EAF7FF'}">${sc.name}</strong>
+            <div style="font-size:10.5px;opacity:.85">${sc.subtitle}</div>
+          </div>
+          <span class="pill ${active ? 'pill-cyan' : ''}">${active ? 'ACTIVE' : 'SELECT'}</span>
+        `;
+        btn.onclick = () => {
+          audioEngine.playUiClick();
+          d.selectedMotionScene = sc.id;
+          saveManager.save();
+          this.renderLoadout();
+        };
+        msGrid.appendChild(btn);
+      });
+    }
 
     const wGrid = $('loadout-worlds');
     wGrid.innerHTML = '';
@@ -651,6 +867,13 @@ class UIController {
     this.startStandardRun({ isDaily: true, seed: getDailySeedNumber() });
   }
 
+  pulseHudEl(el, cls = 'hud-pulse') {
+    if (!el || saveManager.data.settings.reducedMotion) return;
+    el.classList.remove(cls);
+    void el.offsetWidth;
+    el.classList.add(cls);
+  }
+
   // --- RUN HUD (Tactical Holographic Telemetry) ---
   updateHud(s) {
     $('hud-score').textContent = s.score.toLocaleString();
@@ -660,10 +883,25 @@ class UIController {
     $('hud-world-prog').style.width = `${s.worldProg}%`;
     if ($('hud-gate-pct')) $('hud-gate-pct').textContent = `${s.worldProg}%`;
     if ($('hud-objective')) {
+      const sceneTag = s.activeMotionScene ? ` · ${s.activeMotionScene.icon} ${s.activeMotionScene.name.toUpperCase()}` : '';
+      const motionTag = s.activeMotionState ? ` [${s.activeMotionState.toUpperCase()}]` : '';
       $('hud-objective').textContent = s.bossActive
-        ? `OBJECTIVE: ESCAPE BOSS · ${s.worldName.toUpperCase()}`
-        : `OBJECTIVE: REACH THE GATE · ${s.worldName.toUpperCase()}`;
+        ? `OBJECTIVE: ESCAPE BOSS · ${s.worldName.toUpperCase()}${motionTag}`
+        : `REACH GATE · ${s.worldName.toUpperCase()}${sceneTag}${motionTag}`;
     }
+
+    // Audio-visual HUD pulse sync on Shard pickup, Combo growth, Enemy slay & Shield hit!
+    if (this._prevVs !== undefined && s.vs > this._prevVs) this.pulseHudEl($('hud-vs'));
+    if (this._prevKills !== undefined && (s.enemiesDefeated || 0) > this._prevKills) this.pulseHudEl($('hud-kills'));
+    const cValNow = Math.max(s.multiplier, s.combo || 1);
+    if (this._prevCombo !== undefined && cValNow > this._prevCombo) this.pulseHudEl($('hud-combo-plate'));
+    if (this._prevShields !== undefined && (s.totalShields || 0) < this._prevShields) {
+      this.pulseHudEl(document.querySelector('.hud-shield-plate'), 'hud-shield-hit');
+    }
+    this._prevVs = s.vs;
+    this._prevKills = s.enemiesDefeated || 0;
+    this._prevCombo = cValNow;
+    this._prevShields = s.totalShields || 0;
 
     // Top-Left Run Timer (MM:SS) & Angled SHIELD Plasma Gauge
     if ($('hud-timer')) {
@@ -977,9 +1215,21 @@ class UIController {
       $('cust-next').onclick = () => { this.selectedCharIdx = (this.selectedCharIdx + 1) % CHARACTERS.length; this.renderCustomiseStudio('runners'); };
       $('cust-char-btn').onclick = () => {
         if (selected) return;
-        if (unlocked) { d.selectedChar = c.id; saveManager.save(); audioEngine.playUiClick(); this.refreshStatusBars(); this.renderCustomiseStudio('runners'); }
-        else if (saveManager.unlockCharacter(c.id)) { audioEngine.playAchievement(); this.refreshStatusBars(); this.renderCustomiseStudio('runners'); }
-        else this.showToast(`Requires Codex Lv ${c.reqLv}, ${c.costVS} VS${c.costBC ? ` & ${c.costBC} BC` : ''}`);
+        if (unlocked) {
+          const sIdx = slotManager.getSlotIndexForCharacter(c.id);
+          if (sIdx >= 0) slotManager.setActiveSlot(sIdx);
+          else slotManager.assignCharacter(slotManager.getActiveSlotIndex(), c.id, { mode: 'swap', activate: true });
+          audioEngine.playUiClick();
+          this.refreshStatusBars();
+          this.renderCustomiseStudio('runners');
+        } else if (saveManager.unlockCharacter(c.id)) {
+          slotManager.assignCharacter(slotManager.getActiveSlotIndex(), c.id, { mode: 'swap', activate: true });
+          audioEngine.playAchievement();
+          this.refreshStatusBars();
+          this.renderCustomiseStudio('runners');
+        } else {
+          this.showToast(`Requires Codex Lv ${c.reqLv}, ${c.costVS} VS${c.costBC ? ` & ${c.costBC} BC` : ''}`);
+        }
       };
     } else if (tab === 'gear') {
       const maxLv = Math.max(d.codexLevel, saveManager.getHeroState().level);

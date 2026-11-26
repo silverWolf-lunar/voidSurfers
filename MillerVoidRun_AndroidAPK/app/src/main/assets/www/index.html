@@ -108,11 +108,18 @@
           <div class="cs-stage-aura"></div>
           <img id="cs-sprite-img" class="cs-sprite-img anim-breathe" src="assets/art/characters/sprites/miller_front.png" alt="Runner Preview" />
           <div id="cs-stage-fallback" class="cs-stage-fallback hidden">MR</div>
-          <div class="cs-view-bar">
+          <div class="cs-view-bar" style="max-width:98%;overflow-x:auto">
             <button class="cs-view-pill active" data-cs-view="front">Front</button>
             <button class="cs-view-pill" data-cs-view="side">Side</button>
             <button class="cs-view-pill" data-cs-view="back">Back</button>
             <button class="cs-view-pill" data-cs-view="run">🏃 Run</button>
+            <button class="cs-view-pill" data-cs-view="roll">🛞 Roll</button>
+            <button class="cs-view-pill" data-cs-view="flip">🤸 Flip</button>
+            <button class="cs-view-pill" data-cs-view="wall">🧱 Wall</button>
+            <button class="cs-view-pill" data-cs-view="climb">🧗 Climb</button>
+            <button class="cs-view-pill" data-cs-view="glide">🪂 Glide</button>
+            <button class="cs-view-pill" data-cs-view="mage">🔮 Mage</button>
+            <button class="cs-view-pill" data-cs-view="shield">🛡️ Shield</button>
             <button class="cs-view-pill" data-cs-view="attack">⚔️ Atk</button>
             <button id="cs-btn-splash" class="cs-view-pill">🖼️</button>
           </div>
@@ -134,17 +141,30 @@
             </div>
           </div>
           <div class="progress-track" style="height:5px;margin:5px 0"><div id="cs-hero-xp-bar" class="progress-fill" style="background:linear-gradient(90deg,#167a3e,#3DFF7A,#00E5FF)"></div></div>
+          <div id="cs-stats-row" class="cs-stats-row"></div>
           <div id="cs-bonuses" style="font-size:10.5px;opacity:.92;margin-bottom:4px"></div>
           <div id="cs-passive" style="font-size:11px;margin-bottom:2px"></div>
           <div id="cs-sig" style="font-size:11px;opacity:.92"></div>
         </div>
 
+        <!-- Unique Player Slots Strip (1 Unique Character Per Slot — Zero Duplicates) -->
+        <div class="cs-slots-panel">
+          <div class="cs-slots-hdr">
+            <span id="cs-slot-status">PLAYER SLOTS (11/11 UNIQUE)</span>
+            <div style="display:flex;gap:4px">
+              <button id="cs-btn-clear-slot" class="cs-slot-mini-btn" title="Clear Selected Slot">✕ Clear</button>
+              <button id="cs-btn-reset-slots" class="cs-slot-mini-btn" title="Restore Default Unique Slots">↻ Reset</button>
+            </div>
+          </div>
+          <div id="cs-slots-bar" class="slot-strip"></div>
+        </div>
+
         <!-- Portrait Cards Roster Strip -->
         <div id="cs-roster" class="cs-roster"></div>
 
-        <!-- Equip & Instant Play CTA -->
+        <!-- Slot Assign / Swap & Instant Play CTA -->
         <div class="grid-2" style="margin-top:6px">
-          <button id="cs-btn-equip" class="btn btn-sm">✅ EQUIPPED</button>
+          <button id="cs-btn-equip" class="btn btn-sm">✅ SLOT 1 ACTIVE</button>
           <button id="cs-btn-play" class="btn btn-primary btn-sm">▶ PLAY RUNNER</button>
         </div>
       </div>
@@ -159,16 +179,17 @@
       </div>
       <div class="card">
         <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
-          <span>Active Runner & Style</span>
-          <button id="btn-loadout-switch-hero" class="btn btn-sm btn-gold" style="min-height:28px;padding:3px 10px;font-size:11px">👤 Change</button>
+          <span>Active Runner Slot <span id="loadout-slot-pill" class="pill pill-cyan" style="margin-left:4px">SLOT 1</span></span>
+          <button id="btn-loadout-switch-hero" class="btn btn-sm btn-gold" style="min-height:28px;padding:3px 10px;font-size:11px">👤 Manage Slots</button>
         </div>
-        <div style="display:flex;align-items:center;gap:10px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
           <img id="loadout-hero-avatar" class="hero-avatar-lg" src="assets/art/characters/miller_portrait.jpg" alt="Active Runner" />
           <div>
             <strong id="loadout-char-label">Miller Redwolf</strong>
             <div id="loadout-style-label" style="font-size:11px;color:#00E5FF;margin-top:2px"></div>
           </div>
         </div>
+        <div id="loadout-slots-strip" class="slot-strip"></div>
       </div>
       <div class="card">
         <div class="card-title">Void Powers (Tap Cast · Double-Tap Swap)</div>
@@ -177,6 +198,10 @@
       <div class="card">
         <div class="card-title">Optional Boost Consumables (Earned with VS)</div>
         <div id="loadout-consumables" class="grid-3"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">In-Run Motion Set-Piece Scene (Aligned to SharedArt/motions)</div>
+        <div id="loadout-motion-scenes"></div>
       </div>
       <div class="card">
         <div class="card-title">Choose Starting Portal World (1–7)</div>

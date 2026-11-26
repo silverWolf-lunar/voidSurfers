@@ -33,6 +33,14 @@ import {
   createPortalEnemyMesh,
   createStrikeWaveMesh,
 } from './meshFactory.js';
+import { ParticleSystem } from './particleSystem.js';
+import {
+  MOTION_SPECS,
+  MOTION_SCENES,
+  pickAlignedSceneForChunk,
+  getMotionSceneById,
+} from '../config/motionLibrary.js';
+import { MotionController } from './motionController.js';
 
 function createPRNG(seed) {
   let a = seed >>> 0;
@@ -126,10 +134,8 @@ export class VoidRunEngine {
     this.runGroup.visible = false;
     this.scene.add(this.runGroup);
 
-    this.vfxBursts = [];
-    this.trailParticles = [];
-    this.sharedBoxGeo = new THREE.BoxGeometry(0.16, 0.16, 0.16);
-    this.sharedTrailGeo = new THREE.OctahedronGeometry(0.12, 0);
+    this.particles = new ParticleSystem(THREE, 220);
+    this.trailParticles = []; // Lightweight sprite afterimage silhouettes only
   }
 
   getAspect() {
@@ -260,7 +266,7 @@ export class VoidRunEngine {
     if (charId && (!this.menuCharMesh || this.menuCharMesh.userData.charId !== charId)) {
       this.refreshMenuCharacter(charId, saveManager.data.selectedSkin);
     }
-    if (motionMode === 'run' || motionMode === 'attack') {
+    if (motionMode !== 'idle' && motionMode !== 'front' && motionMode !== 'side' && motionMode !== 'back') {
       this.camera.position.set(0.35, 1.85, 4.15);
       this.camera.lookAt(0, 1.05, 0);
     } else {
@@ -405,22 +411,90 @@ export class VoidRunEngine {
   changeLane(dir) {
     const next = this.run.lane + dir;
     if (next < 0 || next > 2) return;
+
+    // 1) Wall-Run Kick-off Jump (Dynamic-Wall-Run-Blueprints.mp4): swiping off a wall launches an aerial wall-jump!
+    if ((this.run.wallRunTimer || 0) > 0) {
+      this.run.wallRunTimer = 0;
+      this.run.wallRunSide = 0;
+      this.run.isJumping = true;
+      this.run.velY = 10.2;
+      this.run.flipType = 'side_aerial';
+      this.run.flipProgress = 0;
+      this.run.jumpElapsed = 0;
+      this.run.jumpDurationEst = 0.58;
+      this.run.motionCounts.wall_run = (this.run.motionCounts.wall_run || 0) + 1;
+      this.addScore(110, '🧱 WALL-JUMP KICK!', '#00E5FF');
+    } else if (this.run.slideTimer > 0) {
+      // 2) Diagonal Dodge-Roll (Rolls-and-Dodges-Animation-set.mp4): lane switch during slide becomes an agile dodge-roll!
+      this.run.rollVariant = 'dodge_roll';
+      this.run.rollDir = dir;
+      this.run.slideTimer = Math.max(this.run.slideTimer, 0.36);
+      this.run.slideDurationTotal = Math.max(this.run.slideDurationTotal || 0.52, this.run.slideTimer);
+      this.run.motionCounts.roll = (this.run.motionCounts.roll || 0) + 1;
+      this.addScore(65, '🛞 DODGE ROLL!', '#3DFF7A');
+    } else if (this.run.isJumping) {
+      // 3) Mid-Air Side Aerial Twist (Flips-and-Tricks-Animation-Set.mp4)!
+      this.run.flipType = 'side_aerial';
+      this.run.flipProgress = 0.05;
+      this.run.laneHopDir = dir;
+      this.run.motionCounts.flip = (this.run.motionCounts.flip || 0) + 1;
+      this.addScore(75, '🤸 SIDE AERIAL!', '#FFD84D');
+    }
+
     this.run.lane = next;
     this.run.targetX = TRACK_CONFIG.laneX[next];
     this.run.laneStayTimer = 0;
+    this.run.laneHopDir = dir;
+    if (!this.run.isJumping && this.run.slideTimer <= 0 && (this.run.paragliderTimer || 0) <= 0 && this.run.surgeTimer <= 0 && this.run.voidlightTimer <= 0) {
+      this.run.laneHopTimer = 0.19;
+    }
     this.run.squashX = 0.86;
     this.run.squashY = 1.12;
+    this.run.motionCounts.locomotion = (this.run.motionCounts.locomotion || 0) + 1;
     audioEngine.playLaneSwitch(dir);
   }
 
-  tryJump() {
-    if (this.run.isJumping) {
+  tryJump(fromRamp = false) {
+    if ((this.run.climbTimer || 0) > 0) return;
+    if ((this.run.wallRunTimer || 0) > 0) {
+      // Jumping directly while on a wall executes an upward wall-kick flip!
+      this.run.wallRunTimer = 0;
+      this.run.wallRunSide = 0;
+      this.run.isJumping = true;
+      this.run.velY = 11.4;
+      this.run.flipType = 'back_flip';
+      this.run.flipProgress = 0;
+      this.run.jumpElapsed = 0;
+      this.run.jumpDurationEst = 0.64;
+      this.run.motionCounts.flip = (this.run.motionCounts.flip || 0) + 1;
+      this.addScore(120, '🧱 WALL BACKFLIP!', '#FFD84D');
+      audioEngine.playJump();
+      return;
+    }
+    if (this.run.isJumping && !fromRamp) {
       this.queueBuffer('up');
       return;
     }
     this.run.slideTimer = 0;
+    this.run.laneHopTimer = 0;
+    this.run.fastFalling = false;
     this.run.isJumping = true;
-    this.run.velY = Math.sqrt(2 * TRACK_CONFIG.jumpHeight * 32);
+    const isAcrobat = MOTION_SPECS.flip.signatureChars.includes(this.run.charId);
+    const jumpBoost = fromRamp ? 1.45 : (this.run.stillstepTimer > 0 || this.run.bonusHighwayTimer > 0) ? 1.32 : 1.0;
+    this.run.velY = Math.sqrt(2 * TRACK_CONFIG.jumpHeight * jumpBoost * 32);
+    this.run.jumpElapsed = 0;
+    this.run.jumpDurationEst = (2 * this.run.velY) / 32;
+
+    if (fromRamp || jumpBoost > 1.1 || isAcrobat || this.run.activeMotionScene?.motionId === 'flip') {
+      this.run.flipType = fromRamp ? 'front_flip' : (this.rng() < 0.35 ? 'back_flip' : 'front_flip');
+      this.run.flipProgress = 0;
+      this.run.motionCounts.flip = (this.run.motionCounts.flip || 0) + 1;
+      if (fromRamp) this.addScore(110, '🤸 RAMP FRONT-FLIP!', '#FFD84D');
+    } else {
+      this.run.flipType = 'standard_jump';
+      this.run.flipProgress = 0;
+    }
+
     this.run.squashX = 0.82;
     this.run.squashY = 1.24;
     this.spawnAuraBurst(this.playerMesh.position, 8);
@@ -428,10 +502,29 @@ export class VoidRunEngine {
   }
 
   trySlide() {
-    if (this.run.isJumping) this.run.velY = -19;
+    if ((this.run.paragliderTimer || 0) > 0) {
+      // Cancel paraglider early into a fast-dive tuck roll!
+      this.run.paragliderTimer = 0;
+      this.run.isJumping = true;
+    }
+    if ((this.run.wallRunTimer || 0) > 0) {
+      this.run.wallRunTimer = 0;
+      this.run.wallRunSide = 0;
+      this.run.isJumping = true;
+    }
+    if (this.run.isJumping) {
+      // Crisp mid-air Fast-Fall Dive straight into a ground roll!
+      this.run.velY = -24;
+      this.run.fastFalling = true;
+    }
+    this.run.laneHopTimer = 0;
     const world = this.getCurrentWorld();
     const iceMult = world.uniqueMechanic === 'ice_physics' ? 1.2 : 1.0;
-    this.run.slideTimer = TRACK_CONFIG.slideDuration * iceMult;
+    const dur = TRACK_CONFIG.slideDuration * iceMult;
+    this.run.slideTimer = dur;
+    this.run.slideDurationTotal = dur;
+    this.run.rollVariant = 'roll';
+    this.run.motionCounts.roll = (this.run.motionCounts.roll || 0) + 1;
     this.spawnAuraBurst(this.playerMesh.position, 6);
     audioEngine.playSlide();
   }
@@ -447,7 +540,7 @@ export class VoidRunEngine {
     this.rng = createPRNG(seed);
 
     while (this.runGroup.children.length) this.runGroup.remove(this.runGroup.children[0]);
-    this.vfxBursts = [];
+    this.particles.attachTo(this.runGroup);
     this.trailParticles = [];
 
     const charId = save.selectedChar;
@@ -516,7 +609,7 @@ export class VoidRunEngine {
       bonusHighwayTimer: 0,
 
       distance: 0,
-      speed: TRACK_CONFIG.baseSpeed * Math.pow(1.05, startWorldId - 1) * (1 + (save.codexLevel - 1) * 0.005),
+      speed: TRACK_CONFIG.baseSpeed * (charData.stats?.speedMult || 1.0) * Math.pow(1.05, startWorldId - 1) * (1 + (save.codexLevel - 1) * 0.005),
       lane: 1,
       x: 0,
       targetX: 0,
@@ -524,10 +617,51 @@ export class VoidRunEngine {
       velY: 0,
       isJumping: false,
       wasJumping: false,
+      fastFalling: false,
+      laneHopTimer: 0,
+      laneHopDir: 0,
+      camX: 0,
+      camY: 3.65,
+      camDipY: 0,
+      camRoll: 0,
+      hitStopTimer: 0,
+      lightFlashTimer: 0,
+      lightFlashColor: 0x4cf3ff,
       squashX: 1,
       squashY: 1,
       slideTimer: 0,
+      slideDurationTotal: TRACK_CONFIG.slideDuration,
+      rollVariant: 'roll',
+      rollDir: 1,
+      flipType: 'standard_jump',
+      flipProgress: 0,
+      jumpElapsed: 0,
+      jumpDurationEst: 0.6,
+      wallRunTimer: 0,
+      wallRunSide: 0,
+      climbTimer: 0,
+      climbDuration: 0.82,
+      paragliderTimer: 0,
+      gliderDeployProg: 0,
+      mageChannelTimer: 0,
+      shieldBashTimer: 0,
+      swordComboStep: 0,
+      forcedSceneId: options.motionSceneId || save.selectedMotionScene || 'auto',
+      activeMotionScene: null,
+      activeMotionState: 'locomotion',
+      scenesVisited: [],
+      motionCounts: {
+        locomotion: 1,
+        roll: 0,
+        flip: 0,
+        wall_run: 0,
+        climb: 0,
+        paraglider: 0,
+        mage_cast: 0,
+        sword_shield: 0,
+      },
       stumbleTimer: 0,
+      deathAnimTimer: 0,
       invulnTimer: 1.6,
       noHitStreak: 0,
       longestNoHit: 0,
@@ -540,7 +674,7 @@ export class VoidRunEngine {
       slots: slot2Id ? [slot1Id, slot2Id] : [slot1Id],
       activeSlotIdx: 0,
       cooldowns: {},
-      shieldHits: charId === 'brann' ? 1 : 0, // Brann Kest Aegis Guard passive!
+      shieldHits: charData.stats?.bonusShields || (charId === 'brann' ? 1 : 0),
       voidResonanceTimer: 0,
       ultimateUsed: false,
       powersUsed: 0,
@@ -797,24 +931,30 @@ export class VoidRunEngine {
       }
 
       if (!isReward) {
-        // Balanced beginner-friendly start -> thrilling mastery ramp
-        const rows = worldDist < 220 && world.id === 1 ? 1 : diff > 0.65 ? 3 : 2;
-        for (let r = 0; r < rows; r++) {
-          const rowZ = zStart - 7 - r * (len / rows);
-          const openLane = (safeLane + r) % 3;
-          for (let lane = 0; lane < 3; lane++) {
-            if (lane === openLane) {
-              if (this.rng() < 0.26 + diff * 0.25) {
-                this.spawnObstacle(this.rng() < 0.55 ? 'ground' : 'overhead', lane, rowZ, world);
+        // Select aligned in-game Motion Set-Piece Scene for this chunk (showcasing all 8 SharedArt/motions in real gameplay!)
+        const alignedScene = pickAlignedSceneForChunk(world.id, chunkIdx, this.run.forcedSceneId);
+        if (alignedScene) {
+          this.spawnAlignedMotionSceneChunk(alignedScene, zStart, len, safeLane, world, diff);
+        } else {
+          // Balanced beginner-friendly start -> thrilling mastery ramp
+          const rows = worldDist < 220 && world.id === 1 ? 1 : diff > 0.65 ? 3 : 2;
+          for (let r = 0; r < rows; r++) {
+            const rowZ = zStart - 7 - r * (len / rows);
+            const openLane = (safeLane + r) % 3;
+            for (let lane = 0; lane < 3; lane++) {
+              if (lane === openLane) {
+                if (this.rng() < 0.26 + diff * 0.25) {
+                  this.spawnObstacle(this.rng() < 0.55 ? 'ground' : 'overhead', lane, rowZ, world);
+                }
+              } else if (this.rng() < 0.48 + diff * 0.35) {
+                const roll = this.rng();
+                let oType = 'ground';
+                if (roll < 0.3) oType = 'tall';
+                else if (roll < 0.58) oType = 'ground';
+                else if (roll < 0.84) oType = 'overhead';
+                else oType = world.id >= 2 ? 'moving' : 'ground';
+                this.spawnObstacle(oType, lane, rowZ, world);
               }
-            } else if (this.rng() < 0.48 + diff * 0.35) {
-              const roll = this.rng();
-              let oType = 'ground';
-              if (roll < 0.3) oType = 'tall';
-              else if (roll < 0.58) oType = 'ground';
-              else if (roll < 0.84) oType = 'overhead';
-              else oType = world.id >= 2 ? 'moving' : 'ground';
-              this.spawnObstacle(oType, lane, rowZ, world);
             }
           }
         }
@@ -824,12 +964,115 @@ export class VoidRunEngine {
     this.run.nextChunkZ -= len;
   }
 
+  spawnAlignedMotionSceneChunk(scene, zStart, len, safeLane, world, diff) {
+    const r = this.run;
+    if (!r.activeMotionScene || r.activeMotionScene.id !== scene.id) {
+      r.activeMotionScene = scene;
+      if (!r.scenesVisited.includes(scene.id)) r.scenesVisited.push(scene.id);
+      if (r.distance > 15) {
+        this.cb.onPowerToast?.(`${scene.icon} SET-PIECE: ${scene.name.toUpperCase()}`);
+      }
+    }
+
+    const midZ = zStart - 15;
+    const endZ = zStart - 24;
+    const altLane = (safeLane + 1) % 3;
+    const thirdLane = (safeLane + 2) % 3;
+
+    switch (scene.id) {
+      case 'scene_sprint_gauntlet':
+        // 1. Dynamic Locomotion: high-tempo slalom pillars requiring rapid lane-pivot banking
+        this.spawnObstacle('tall', altLane, zStart - 8, world);
+        this.spawnObstacle('tall', safeLane, midZ, world);
+        this.spawnObstacle('tall', thirdLane, endZ, world);
+        this.spawnCollectible('shard', safeLane, zStart - 8);
+        this.spawnCollectible('shard', altLane, midZ);
+        this.spawnCollectible('shard', safeLane, endZ);
+        break;
+
+      case 'scene_roll_corridor':
+        // 2. Rolls & Dodges: sequential overhead energy beams + lateral sweeper orb for roll & dodge-roll
+        this.spawnObstacle('overhead', safeLane, zStart - 8, world);
+        this.spawnObstacle('overhead', altLane, zStart - 8, world);
+        this.spawnObstacle('tall', thirdLane, zStart - 8, world);
+        this.spawnObstacle('overhead', altLane, midZ, world);
+        this.spawnObstacle('moving', safeLane, endZ, world);
+        break;
+
+      case 'scene_trick_canyon':
+        // 3. Flips & Tricks: glowing Launch Ramps before tall barriers + apex Golden Bonus Ring
+        this.spawnObstacle('launch_ramp', safeLane, zStart - 8, world);
+        this.spawnObstacle('tall', safeLane, zStart - 12, world);
+        this.spawnCollectible('bonus_ring', safeLane, zStart - 12);
+        this.spawnObstacle('launch_ramp', altLane, zStart - 20, world);
+        this.spawnObstacle('ground', altLane, endZ, world);
+        break;
+
+      case 'scene_wall_run_alley':
+        // 4. Dynamic Wall-Run: left & right outer-lane Wall-Run Panels above floor hazards
+        this.spawnObstacle('wall_panel', 0, zStart - 10, world);
+        this.spawnObstacle('wall_panel', 2, zStart - 21, world);
+        this.spawnObstacle('hazard_floor', 0, zStart - 10, world, { hazardKind: 'lava' });
+        this.spawnObstacle('hazard_floor', 1, midZ, world, { hazardKind: 'lava' });
+        this.spawnObstacle('hazard_floor', 2, zStart - 21, world, { hazardKind: 'lava' });
+        break;
+
+      case 'scene_obsidian_ascent':
+        // 5. Climbing Set: stepped vertical Ascent Climb Walls across lanes + overhead hurdle
+        this.spawnObstacle('climb_wall', safeLane, zStart - 10, world);
+        this.spawnObstacle('climb_wall', altLane, zStart - 10, world);
+        this.spawnObstacle('tall', thirdLane, zStart - 10, world);
+        this.spawnObstacle('climb_wall', altLane, zStart - 21, world);
+        this.spawnObstacle('ground', safeLane, zStart - 21, world);
+        break;
+
+      case 'scene_rift_updraft':
+        // 6. Paraglider Set: Launch Ramp into swirling Cyan Updraft Columns above monoliths
+        this.spawnObstacle('launch_ramp', safeLane, zStart - 7, world);
+        this.spawnObstacle('updraft_column', safeLane, zStart - 13, world);
+        this.spawnObstacle('updraft_column', altLane, zStart - 21, world);
+        this.spawnObstacle('tall', thirdLane, midZ, world);
+        this.spawnObstacle('ground', safeLane, endZ, world);
+        break;
+
+      case 'scene_arcane_barrage':
+        // 7. Mage Animation Set: Codex Essence cluster + oncoming Portal Creatures for dual-orb spellcasting
+        this.spawnCollectible('essence', safeLane, zStart - 7);
+        this.spawnCollectible('essence', altLane, zStart - 14);
+        this.spawnObstacle('ground', thirdLane, midZ, world);
+        this.spawnObstacle('overhead', safeLane, endZ, world);
+        if (r.portalEnemies.length < 3) this.spawnPortalEnemy();
+        break;
+
+      case 'scene_vanguard_duel':
+        // 8. Sword & Shield Set: Armored creature duel + destructible hurdles for 3-hit sword combo & shield bash
+        this.spawnObstacle('ground', safeLane, zStart - 9, world);
+        this.spawnObstacle('ground', altLane, midZ, world);
+        this.spawnObstacle('tall', thirdLane, midZ, world);
+        if (r.portalEnemies.length < 3) this.spawnPortalEnemy();
+        break;
+    }
+  }
+
   spawnObstacle(type, lane, worldZ, world, opts = {}) {
     const isIllusion =
       opts.isIllusion ??
-      (world.uniqueMechanic === 'illusions' && type !== 'hazard_floor' && this.rng() < 0.25);
+      (world.uniqueMechanic === 'illusions' &&
+        type !== 'hazard_floor' &&
+        type !== 'launch_ramp' &&
+        type !== 'wall_panel' &&
+        type !== 'climb_wall' &&
+        type !== 'updraft_column' &&
+        this.rng() < 0.25);
     const mesh = createObstacleMesh(this.THREE, type, world, isIllusion);
-    const x = type === 'sonic_low' || type === 'sonic_high' ? 0 : TRACK_CONFIG.laneX[lane];
+    const x =
+      type === 'sonic_low' || type === 'sonic_high'
+        ? 0
+        : type === 'wall_panel'
+        ? lane === 0
+          ? -1.82
+          : 1.82
+        : TRACK_CONFIG.laneX[lane];
     mesh.position.set(x, 0, worldZ);
     this.runGroup.add(mesh);
 
@@ -865,36 +1108,41 @@ export class VoidRunEngine {
     });
   }
 
-  spawnVfxBurst(pos, colorHex, count = 14) {
-    const THREE = this.THREE;
-    const isHigh = saveManager.data.settings.highGraphics;
-    const n = isHigh ? count : Math.ceil(count * 0.45);
-    const mat = new THREE.MeshBasicMaterial({ color: colorHex });
-    for (let i = 0; i < n; i++) {
-      const m = new THREE.Mesh(this.sharedBoxGeo, mat);
-      m.position.copy(pos);
-      this.runGroup.add(m);
-      this.vfxBursts.push({
-        mesh: m,
-        vx: (Math.random() - 0.5) * 8,
-        vy: 1.8 + Math.random() * 5.5,
-        vz: (Math.random() - 0.5) * 8,
-        life: 0.45 + Math.random() * 0.35,
-      });
-    }
+  triggerLightFlash(colorHex, duration = 0.24) {
+    if (!this.run || saveManager.data.settings.reducedMotion) return;
+    this.run.lightFlashColor = colorHex;
+    this.run.lightFlashTimer = Math.max(this.run.lightFlashTimer || 0, duration);
+  }
+
+  triggerHitStop(seconds = 0.042) {
+    if (!this.run || saveManager.data.settings.reducedMotion) return;
+    this.run.hitStopTimer = Math.max(this.run.hitStopTimer || 0, seconds);
+  }
+
+  spawnVfxBurst(pos, colorHex, count = 14, preset = 'collision') {
+    const highGraphics = saveManager.data.settings.highGraphics;
+    this.particles.emit(preset, pos, {
+      count,
+      colorStart: colorHex,
+      colorEnd: preset === 'pickup' ? 0xb466ff : colorHex,
+      highGraphics,
+    });
   }
 
   spawnAuraBurst(pos, count = 10) {
     const aura = this.run.auraData || AURA_FX[0];
     const col = aura.rainbow ? RAINBOW_HEX[Math.floor(Math.random() * RAINBOW_HEX.length)] : aura.color;
-    this.spawnVfxBurst(pos, col, count);
+    this.particles.emit('pickup', pos, {
+      count,
+      colorStart: col,
+      colorEnd: 0xffffff,
+      highGraphics: saveManager.data.settings.highGraphics,
+    });
   }
 
   spawnFireworks(pos) {
     if (saveManager.data.settings.reducedMotion) return;
-    RAINBOW_HEX.slice(0, 4).forEach((col) => {
-      this.spawnVfxBurst(pos, col, 8);
-    });
+    this.particles.emitFireworks(pos, RAINBOW_HEX.slice(0, 4), saveManager.data.settings.highGraphics);
   }
 
   addScore(points, popupLabel = null, popupColor = '#00E5FF') {
@@ -959,21 +1207,31 @@ export class VoidRunEngine {
     if (r.weaponCd > 0) return;
 
     const w = r.gear.weapon;
-    const range = w.range * (r.heroBonuses ? r.heroBonuses.rangeMult : 1.0);
+    const range = w.range * (r.heroBonuses ? r.heroBonuses.rangeMult : 1.0) * (r.charData?.stats?.attackRangeMult || 1.0);
     r.weaponCd = w.cd;
     r.enemySlowTimer = 0; // Weapon slash cleaves off snares!
 
-    // Trigger full 3-phase hero-specific weapon attack choreography!
+    // Trigger full 3-phase data-driven weapon attack choreography + 3-Hit Sword & Shield Cadence!
     r.attackAnimDuration = 0.52;
     r.attackAnimTimer = 0.52;
-    r.attackComboSide = -(r.attackComboSide || 1);
-    r.attackType =
-      r.charId === 'brann' ? 'slam' :
-      r.charId === 'elara' ? 'thrust' :
-      r.charId === 'nyx' ? 'twin' : 'slash';
+    r.swordComboStep = ((r.swordComboStep || 0) % 3) + 1;
+    r.attackComboSide = r.swordComboStep === 2 ? -1 : 1;
+    const baseAtk = r.charData?.attackType || 'slash';
+    if ((r.charId === 'brann' || r.charId === 'alton' || r.shieldHits > 0) && r.swordComboStep === 3) {
+      r.attackType = 'shield_bash';
+      r.shieldBashTimer = 0.45;
+    } else if (r.charId === 'elara' || r.charId === 'harry' || r.charId === 'felix') {
+      r.attackType = 'mage_cast';
+      r.mageChannelTimer = 0.55;
+      r.motionCounts.mage_cast = (r.motionCounts.mage_cast || 0) + 1;
+    } else {
+      r.attackType = baseAtk;
+    }
+    r.motionCounts.sword_shield = (r.motionCounts.sword_shield || 0) + 1;
 
     audioEngine.playWeaponStrike();
     NativeBridge.vibrate(25);
+    this.triggerLightFlash(w.color || 0x4cf3ff, 0.26);
 
     // Launch glowing weapon crescent wave VFX
     const waveMesh = createStrikeWaveMesh(this.THREE, w.color, w.lanes);
@@ -1007,6 +1265,10 @@ export class VoidRunEngine {
 
     if (hits >= 2) {
       this.addScore(hits * 140, `🔥 MULTI-SLAY ×${hits}!`, '#FFD84D');
+    }
+    if (hits > 0) {
+      this.triggerHitStop(0.042);
+      if (!saveManager.data.settings.reducedMotion) r.cameraShake = Math.max(r.cameraShake, 0.24);
     }
   }
 
@@ -1160,6 +1422,9 @@ export class VoidRunEngine {
         precious: { id, name: 'Thread Mend', icon: '🧵', ve: 20, cd: 15, duration: 2.5, color: '#44FF88' },
         rumbidzai: { id, name: 'Blade Phase', icon: '🗡️', ve: 30, cd: 12, duration: 1.2, color: '#FF38A8' },
         harry: { id, name: 'Ritual Ward', icon: '⭕', ve: 35, cd: 22, duration: 8.0, color: '#FFB020' },
+        alton: { id, name: 'Density Crush', icon: '💎', ve: 30, cd: 15, duration: 0.9, color: '#A24FFF' },
+        james: { id, name: 'Tectonic Ramp', icon: '🪨', ve: 28, cd: 14, duration: 0.9, color: '#FF7A28' },
+        felix: { id, name: 'Temporal Anchor', icon: '⏱️', ve: 30, cd: 16, duration: 3.2, color: '#3B7BFF' },
         garfield: { id, name: 'Duplicate Burst', icon: '✨', ve: 30, cd: 25, duration: 4.0, color: '#FFEE44' },
         ruth: { id, name: 'Cryo Path', icon: '❄️', ve: 40, cd: 20, duration: 4.0, color: '#5CE8E4' },
       };
@@ -1212,9 +1477,11 @@ export class VoidRunEngine {
     this.run.lastPowerUsed = info.id;
     this.run.infestedTimer = 0;
     this.run.enemySlowTimer = 0; // Casting a Void Power shatters enemy slow snares!
-    this.run.attackAnimDuration = 0.44;
-    this.run.attackAnimTimer = 0.44;
-    this.run.attackType = 'cast';
+    this.run.attackAnimDuration = 0.54;
+    this.run.attackAnimTimer = 0.54;
+    this.run.attackType = 'mage_cast';
+    this.run.mageChannelTimer = 0.68;
+    this.run.motionCounts.mage_cast = (this.run.motionCounts.mage_cast || 0) + 1;
     if (this.run.gear.relic.cdReduction) {
       this.run.cooldowns[info.id] *= 1 - this.run.gear.relic.cdReduction;
     }
@@ -1227,6 +1494,7 @@ export class VoidRunEngine {
     audioEngine.playPower(info.id);
     audioEngine.playBark(info.name + '!');
     NativeBridge.vibrate(45);
+    this.triggerLightFlash(0xb466ff, 0.28);
     this.spawnAuraBurst(this.playerMesh.position, 22);
     this.cb.onPowerToast?.(`${info.icon} ${info.name.toUpperCase()}!`);
 
@@ -1325,6 +1593,26 @@ export class VoidRunEngine {
       case 'sig_harry':
         this.run.ritualWardTimer = 8.0;
         this.run.ritualWardLane = this.run.lane;
+        break;
+      case 'sig_alton':
+        this.destroyObstaclesAhead(22 * yieldMult, true);
+        this.pushChaser(16 * pushMult);
+        this.run.shieldHits = Math.max(this.run.shieldHits, 1);
+        if (!saveManager.data.settings.reducedMotion) this.run.cameraShake = 0.45;
+        this.spawnVfxBurst(this.playerMesh.position, 0xa24fff, 24);
+        break;
+      case 'sig_james':
+        this.destroyObstaclesAhead(25 * yieldMult, true);
+        this.pushChaser(14 * pushMult);
+        this.run.vs += 6;
+        if (!saveManager.data.settings.reducedMotion) this.run.cameraShake = 0.44;
+        this.spawnVfxBurst(this.playerMesh.position, 0xff7a28, 24);
+        break;
+      case 'sig_felix':
+        this.run.timeBleedTimer = Math.max(this.run.timeBleedTimer, 3.2);
+        this.run.slowMoScale = 0.42;
+        this.run.doubleTimer = Math.max(this.run.doubleTimer, 4.0);
+        this.spawnVfxBurst(this.playerMesh.position, 0x3b7bff, 22);
         break;
       case 'sig_garfield':
         if (this.run.lastPowerupKind) this.applyPowerup(this.run.lastPowerupKind, 5.0);
@@ -1757,17 +2045,24 @@ export class VoidRunEngine {
     if (r.shieldHits > 0) {
       r.shieldHits -= 1;
       r.invulnTimer = 0.9;
+      r.shieldBashTimer = 0.48;
+      r.attackAnimDuration = 0.48;
+      r.attackAnimTimer = 0.48;
+      r.attackType = 'shield_bash';
+      r.motionCounts.sword_shield = (r.motionCounts.sword_shield || 0) + 1;
       this.pushChaser(15);
       this.spawnAuraBurst(this.playerMesh.position, 22);
       audioEngine.playPower('shadow_shield');
-      this.cb.onPowerToast?.('🛡️ SHADOW SHIELD ABSORBED!');
+      this.cb.onPowerToast?.('🛡️ AEGIS SHIELD BASH COUNTER!');
       return;
     }
     if (r.barrierHits > 0) {
       r.barrierHits -= 1;
       r.invulnTimer = 0.9;
+      r.shieldBashTimer = 0.45;
+      r.motionCounts.sword_shield = (r.motionCounts.sword_shield || 0) + 1;
       this.spawnAuraBurst(this.playerMesh.position, 18);
-      this.cb.onPowerToast?.('🛡️ BARRIER ABSORBED!');
+      this.cb.onPowerToast?.('🛡️ BARRIER BLOCKED!');
       return;
     }
     if (saveManager.data.codexLevel >= 55 && r.voidResonanceTimer <= 0 && r.ve >= 5) {
@@ -1800,6 +2095,8 @@ export class VoidRunEngine {
     r.multiplier = Math.max(1, r.multiplier - 2);
     r.chaserDist = Math.max(1.5, r.chaserDist - 11);
     if (!saveManager.data.settings.reducedMotion) r.cameraShake = 0.42;
+    this.triggerHitStop(0.05);
+    this.triggerLightFlash(0xff2e55, 0.32);
     audioEngine.playStumble();
     NativeBridge.vibrate(75);
     this.spawnVfxBurst(this.playerMesh.position, 0xff2244, 16);
@@ -1926,6 +2223,11 @@ export class VoidRunEngine {
     saveManager.save();
     this.run.reviveUsed = true;
     this.run.stumbleTimer = 0;
+    this.run.deathAnimTimer = 0;
+    if (this.playerMesh?.userData?.bodyPivot) {
+      this.playerMesh.userData.bodyPivot.rotation.set(0, 0, 0);
+      this.playerMesh.userData.bodyPivot.position.y = 0;
+    }
     this.run.invulnTimer = 2.8;
     this.run.chaserDist = this.run.chaserMaxDist;
     this.destroyObstaclesAhead(30, false);
@@ -1966,6 +2268,8 @@ export class VoidRunEngine {
       bestMomentFrames: r.bestMomentFrames,
       challengeDist: r.ghostTargetDist,
       challengerName: r.challengerName,
+      motionCounts: { ...(r.motionCounts || {}) },
+      scenesVisited: [...(r.scenesVisited || [])],
     };
   }
 
@@ -2000,100 +2304,71 @@ export class VoidRunEngine {
       if (this.menuCharMesh) {
         const ud = this.menuCharMesh.userData;
         const pMode = this.menuPreviewMotion || 'idle';
-        if (ud.isSpriteRig && (pMode === 'run' || pMode === 'attack') && ud.skeletalReady) {
-          // Live 3D 10-part skeletal Running & Attacking showcase right inside Character Select!
+        const isLiveMotionPreview = ['run', 'attack', 'roll', 'flip', 'wall', 'climb', 'glide', 'mage', 'shield'].includes(pMode);
+        if (ud.isSpriteRig && isLiveMotionPreview && ud.skeletalReady) {
+          // Live 3D 10-part skeletal preview of all 8 SharedArt/motions right inside Character Select!
           ud.frontPlane.visible = false;
           ud.sidePlane.visible = false;
           ud.backRunGroup.visible = true;
           ud.skelGroup.visible = true;
           ud.backFullPlane.visible = false;
 
-          const runC = now * 0.0155;
-          const s = Math.sin(runC);
-          const c = Math.cos(runC);
-          this.menuCharMesh.position.y = 0;
-          // Angle 3/4 so player sees torso twist, pumping hands, kicking 3D boots & weapon slashes!
-          ud.bodyPivot.rotation.set(0, Math.sin(now * 0.0014) * 0.55, 0);
-          ud.bodyPivot.scale.set(1, 1, 1);
-
-          ud.hipsPivot.position.set(s * 0.05, ud.hipBaseY + Math.abs(c) * 0.14, 0);
-          ud.hipsPivot.rotation.set(0, -s * 0.18, s * 0.08);
-          ud.torsoPivot.rotation.set(-0.22, s * 0.34, -s * 0.09);
-          ud.headPivot.rotation.set(0.14 + Math.abs(c) * 0.05, -s * 0.16, s * 0.04);
-
-          const lArm = -s;
-          ud.lShoulderPivot.rotation.set(lArm * 0.56, 0, 0.46 - lArm * 0.18);
-          ud.lShoulderPivot.position.z = -0.02 + lArm * 0.16;
-          ud.lElbowPivot.rotation.set(-0.48 - Math.max(0, lArm) * 0.26, 0, -0.22 - lArm * 0.32);
-
-          const rArm = s;
-          ud.rShoulderPivot.rotation.set(rArm * 0.56, 0, -0.46 + rArm * 0.18);
-          ud.rShoulderPivot.position.z = -0.02 + rArm * 0.16;
-          ud.rElbowPivot.rotation.set(-0.48 - Math.max(0, rArm) * 0.26, 0, 0.22 + rArm * 0.32);
-
-          const lFwd = Math.max(0, s);
-          const lBack = Math.max(0, -s);
-          ud.lHipPivot.position.y = lFwd * 0.2 + lBack * 0.11;
-          ud.lHipPivot.rotation.set(-s * 0.56, 0, 0.04);
-          ud.lHipPivot.scale.y = 1 - lBack * 0.12 - lFwd * 0.08;
-          ud.lKneePivot.rotation.set(0.18 + lBack * 0.92 + Math.max(0, c) * 0.36, 0, 0);
-          ud.lKneePivot.scale.y = 1 - lBack * 0.18;
-
-          const rFwd = Math.max(0, -s);
-          const rBack = Math.max(0, s);
-          ud.rHipPivot.position.y = rFwd * 0.2 + rBack * 0.11;
-          ud.rHipPivot.rotation.set(s * 0.56, 0, -0.04);
-          ud.rHipPivot.scale.y = 1 - rBack * 0.12 - rFwd * 0.08;
-          ud.rKneePivot.rotation.set(0.18 + rBack * 0.92 + Math.max(0, -c) * 0.36, 0, 0);
-          ud.rKneePivot.scale.y = 1 - rBack * 0.18;
-
-          if (ud.slashArcMesh) ud.slashArcMesh.visible = false;
-          if (ud.castRingMesh) ud.castRingMesh.visible = false;
-          if (ud.rWeaponMesh) ud.rWeaponMesh.scale.setScalar(pMode === 'attack' ? 1.24 : 0.9);
-
-          if (pMode === 'attack') {
-            const cycleMs = 950;
-            const atkP = (now % cycleMs) / cycleMs;
-            const dir = Math.floor(now / cycleMs) % 2 === 0 ? 1 : -1;
-            const swing = atkP < 0.24 ? -(atkP / 0.24) : atkP < 0.68 ? -1 + 2 * (1 - Math.pow(1 - (atkP - 0.24) / 0.44, 3)) : 1 - (atkP - 0.68) / 0.32;
-            const slashVis = atkP >= 0.24 && atkP < 0.68;
-            const slashProg = slashVis ? (atkP - 0.24) / 0.44 : 0;
-            const cid = ud.charId;
-            if (cid === 'brann') {
-              ud.torsoPivot.rotation.x = -0.18 + swing * 0.46;
-              ud.rShoulderPivot.rotation.set(-0.55 + swing * 0.85, 0, 1.05 - swing * 1.35);
-              ud.lShoulderPivot.rotation.set(-0.45 + swing * 0.75, 0, -0.85 + swing * 1.15);
-            } else if (cid === 'nyx') {
-              ud.torsoPivot.rotation.y = swing * 0.45 * dir;
-              ud.rShoulderPivot.rotation.set(-0.45 - swing * 0.35, 0, -0.85 + swing * 1.45);
-              ud.lShoulderPivot.rotation.set(-0.45 - swing * 0.35, 0, 0.85 - swing * 1.45);
-            } else if (cid === 'elara') {
-              ud.torsoPivot.rotation.y = -0.58 * swing;
-              ud.rShoulderPivot.rotation.set(-0.62, 0, 0.25 - swing * 0.85);
-              if (ud.castRingMesh && slashVis) {
-                ud.castRingMesh.visible = true;
-                const cs = 0.6 + slashProg * 1.0;
-                ud.castRingMesh.scale.set(cs, cs, 1);
-                ud.castRingMesh.rotation.z = slashProg * 4.5;
-              }
-            } else {
-              ud.torsoPivot.rotation.y = -swing * 0.82 * dir;
-              ud.rShoulderPivot.rotation.set(-0.55, 0, dir > 0 ? 0.65 - swing * 1.45 : -0.75 + swing * 1.35);
-              ud.rElbowPivot.rotation.set(-0.28, 0, -swing * 0.65 * dir);
-            }
-            if (ud.slashArcMesh && slashVis) {
-              ud.slashArcMesh.visible = true;
-              ud.slashArcMat.color.setHex(ud.accentColor || 0x4cf3ff);
-              ud.slashArcMat.opacity = Math.sin(slashProg * Math.PI) * 0.92;
-              const sc = 0.85 + slashProg * 0.45;
-              ud.slashArcMesh.scale.set(sc * dir, sc, 1);
-              ud.slashArcMesh.rotation.z = (-0.9 + slashProg * 2.4) * dir;
-              ud.slashArcMesh.rotation.x = cid === 'brann' ? 0.15 : Math.PI * 0.44;
-            }
-          }
+          const cyc = (now * 0.0011) % 1.0;
+          const previewState = {
+            x: 0,
+            targetX: pMode === 'run' ? Math.sin(now * 0.003) * 0.35 : pMode === 'glide' ? Math.sin(now * 0.0025) * 0.45 : 0,
+            speed: 14.5,
+            targetSpeed: 15.5,
+            squashX: 1,
+            squashY: 1,
+            stumbleTimer: 0,
+            charId: ud.charId || 'miller',
+            gear: { weapon: { color: ud.accentColor || 0x4cf3ff } },
+            slideTimer: pMode === 'roll' ? (1 - cyc) * 0.52 : 0,
+            slideDurationTotal: 0.52,
+            rollVariant: pMode === 'roll' && Math.floor(now * 0.0011) % 2 === 1 ? 'dodge_roll' : 'roll',
+            rollDir: 1,
+            isJumping: pMode === 'flip',
+            flipType: pMode === 'flip' ? ['front_flip', 'back_flip', 'side_aerial'][Math.floor(now * 0.0011) % 3] : 'standard_jump',
+            flipProgress: cyc,
+            laneHopDir: 1,
+            wallRunTimer: pMode === 'wall' ? 1.0 : 0,
+            wallRunSide: pMode === 'wall' ? (Math.floor(now * 0.0008) % 2 === 0 ? -1 : 1) : 0,
+            climbTimer: pMode === 'climb' ? (1 - cyc) * 0.82 : 0,
+            climbDuration: 0.82,
+            paragliderTimer: pMode === 'glide' ? 1.5 : 0,
+            gliderDeployProg: 1,
+            surgeTimer: 0,
+            voidlightTimer: 0,
+            shieldHits: pMode === 'shield' ? 1 : 0,
+            shieldBashTimer: pMode === 'shield' ? (1 - cyc) * 0.45 : 0,
+            mageChannelTimer: pMode === 'mage' ? 0.5 : 0,
+            attackAnimTimer: pMode === 'attack' || pMode === 'mage' || pMode === 'shield' ? (1 - cyc) * 0.52 : 0,
+            attackAnimDuration: 0.52,
+            attackComboSide: Math.floor(now * 0.0015) % 2 === 0 ? 1 : -1,
+            swordComboStep: (Math.floor(now * 0.0015) % 3) + 1,
+            attackType:
+              pMode === 'mage'
+                ? 'mage_cast'
+                : pMode === 'shield'
+                ? 'shield_bash'
+                : ud.charId === 'brann' || ud.charId === 'alton' || ud.charId === 'james'
+                ? 'slam'
+                : ud.charId === 'elara' || ud.charId === 'harry' || ud.charId === 'felix'
+                ? 'thrust'
+                : ud.charId === 'nyx' || ud.charId === 'rumbidzai'
+                ? 'twin'
+                : 'slash',
+          };
+          MotionController.applyRigMotion(ud, previewState, now, rawDt);
+          this.menuCharMesh.position.y = pMode === 'glide' ? 0.35 : pMode === 'flip' ? Math.sin(cyc * Math.PI) * 0.45 : 0;
         } else if (ud.isSpriteRig) {
           if (ud.slashArcMesh) ud.slashArcMesh.visible = false;
           if (ud.castRingMesh) ud.castRingMesh.visible = false;
+          if (ud.gliderMesh) ud.gliderMesh.visible = false;
+          if (ud.aegisShieldMesh) ud.aegisShieldMesh.visible = false;
+          if (ud.lCastOrb) ud.lCastOrb.visible = false;
+          if (ud.rCastOrb) ud.rCastOrb.visible = false;
           ud.bodyPivot.rotation.set(0, 0, 0);
           this.menuTurnAngle = (this.menuTurnAngle || 0) + rawDt * 0.42;
           this.updateMenuSpriteTurnaround(this.menuTurnAngle);
@@ -2128,6 +2403,26 @@ export class VoidRunEngine {
 
     if (this.mode === 'running') {
       this.stepRun(rawDt, now);
+    } else if (this.mode === 'gameover' && this.run && this.playerMesh) {
+      // Explicit Death / Defeat Collapse animation state on the reusable character rig!
+      this.run.deathAnimTimer = Math.min(1, (this.run.deathAnimTimer || 0) + rawDt * 2.4);
+      const dp = this.run.deathAnimTimer;
+      const easeOut = 1 - Math.pow(1 - dp, 3);
+      const ud = this.playerMesh.userData;
+      if (ud.isSpriteRig && ud.skeletalReady) {
+        ud.hipsPivot.position.y = ud.hipBaseY * (1 - easeOut * 0.62);
+        ud.torsoPivot.rotation.set(0.72 * easeOut, 0.25 * easeOut, -0.45 * easeOut);
+        ud.headPivot.rotation.set(0.45 * easeOut, 0, -0.22 * easeOut);
+        ud.lShoulderPivot.rotation.set(0.65 * easeOut, 0, 0.72 * easeOut);
+        ud.rShoulderPivot.rotation.set(0.55 * easeOut, 0, -0.78 * easeOut);
+        ud.lHipPivot.rotation.set(-0.68 * easeOut, 0, 0.14 * easeOut);
+        ud.lKneePivot.rotation.set(1.18 * easeOut, 0, 0);
+        ud.rHipPivot.rotation.set(-0.42 * easeOut, 0, -0.18 * easeOut);
+        ud.rKneePivot.rotation.set(0.95 * easeOut, 0, 0);
+      } else if (ud.bodyPivot) {
+        ud.bodyPivot.rotation.x = 1.25 * easeOut;
+        ud.bodyPivot.position.y = -0.35 * easeOut;
+      }
     }
 
     this.renderer.render(this.scene, this.camera);
@@ -2136,6 +2431,12 @@ export class VoidRunEngine {
   stepRun(rawDt, now) {
     const r = this.run;
     const world = this.getCurrentWorld();
+
+    // Micro hit-stop (40–50ms impact freeze-frame for crisp combat & collision weight!)
+    if (r.hitStopTimer > 0) {
+      r.hitStopTimer = Math.max(0, r.hitStopTimer - rawDt);
+      return;
+    }
 
     let timeScale = 1.0;
     if (r.timeBleedTimer > 0) {
@@ -2162,8 +2463,16 @@ export class VoidRunEngine {
       'voidSenseTimer', 'stillstepTimer', 'voidwalkTimer', 'eclipseVeilTimer', 'chronalHavenTimer',
       'voidDomainTimer', 'voidlightTimer', 'conceptReversalTimer', 'ritualWardTimer', 'cryoPathTimer',
       'voidResonanceTimer', 'infestedTimer', 'timeSlowZoneTimer', 'gravityDriftTimer', 'darkVeilTimer',
-      'controlsInvertedTimer', 'emotionSlugTimer', 'bonusHighwayTimer', 'weaponCd', 'attackAnimTimer', 'enemySlowTimer',
+      'controlsInvertedTimer', 'emotionSlugTimer', 'bonusHighwayTimer', 'weaponCd', 'attackAnimTimer',
+      'enemySlowTimer', 'laneHopTimer', 'wallRunTimer', 'climbTimer', 'paragliderTimer',
+      'mageChannelTimer', 'shieldBashTimer',
     ].forEach(dec);
+    if (r.wallRunTimer <= 0) r.wallRunSide = 0;
+    if ((r.paragliderTimer > 0 || r.surgeTimer > 0 || r.voidlightTimer > 0)) {
+      r.gliderDeployProg = Math.min(1, (r.gliderDeployProg || 0) + rawDt * 6.5);
+    } else {
+      r.gliderDeployProg = 0;
+    }
 
     if (r.nearMissComboTimer > 0) {
       r.nearMissComboTimer -= rawDt;
@@ -2192,36 +2501,76 @@ export class VoidRunEngine {
     if (r.voidlightTimer > 0) targetSpeed *= 2.2;
     if (r.voidDomainTimer > 0) targetSpeed *= 1.3;
     if (r.bonusHighwayTimer > 0) targetSpeed *= 1.25;
+    if (r.activeMotionScene?.speedMult) targetSpeed *= r.activeMotionScene.speedMult;
+    r.targetSpeed = targetSpeed;
     r.speed += (targetSpeed - r.speed) * Math.min(1, rawDt * 6);
 
     this.advanceWorldZ(r.speed * worldDt);
 
-    // Player horizontal movement + responsive lean
-    let laneLerp = r.charId === 'nyx' ? 21 : r.charId === 'rumbidzai' ? 20 : 15;
-    if (world.uniqueMechanic === 'ice_physics') laneLerp *= 0.68;
+    // Player horizontal movement + agile aerial banking
+    const isAerialGlide = r.surgeTimer > 0 || r.voidlightTimer > 0 || (r.paragliderTimer || 0) > 0;
+    let laneLerp = r.charId === 'nyx' ? 22 : r.charId === 'rumbidzai' ? 21 : 16.5;
+    if (isAerialGlide) laneLerp *= 1.4;
+    if (world.uniqueMechanic === 'ice_physics' && !isAerialGlide) laneLerp *= 0.68;
     if (r.gravityDriftTimer > 0) {
       r.targetX = Math.max(-1.2, Math.min(1.2, r.targetX + r.gravityDriftDir * rawDt * 0.42));
     }
     r.x += (r.targetX - r.x) * Math.min(1, laneLerp * rawDt);
 
-    // Vertical physics + landing squash & SFX
+    // Vertical physics: Climbing Ascent, Paraglider Soar, Dynamic Wall-Run, Stillstep Hover, Acrobatic Flip Jump & Roll!
     r.wasJumping = r.isJumping;
-    if (r.stillstepTimer > 0 && !r.isJumping) {
+    if ((r.climbTimer || 0) > 0) {
+      // Climbing Set: vertical hand-over-hand ascent up cliff face -> top ledge mantle launch!
+      r.isJumping = false;
+      const p = Math.max(0, Math.min(1, 1 - r.climbTimer / (r.climbDuration || 0.82)));
+      const targetClimbY = p < 0.78 ? (p / 0.78) * 2.35 : 2.35 + Math.sin(((p - 0.78) / 0.22) * Math.PI) * 0.35;
+      r.y += (targetClimbY - r.y) * Math.min(1, rawDt * 18);
+      if (r.climbTimer <= 0.04) {
+        r.climbTimer = 0;
+        r.isJumping = true;
+        r.velY = 5.5;
+        r.flipType = 'front_flip';
+        r.flipProgress = 0;
+      }
+    } else if (isAerialGlide) {
+      r.isJumping = false;
+      r.velY = 0;
+      r.y += (2.35 - r.y) * Math.min(1, rawDt * 8);
+    } else if ((r.wallRunTimer || 0) > 0) {
+      // Dynamic Wall-Run Set: elevated banked wall stride along left or right wall panel!
+      r.isJumping = false;
+      r.velY = 0;
+      r.y += (1.18 - r.y) * Math.min(1, rawDt * 14);
+    } else if (r.stillstepTimer > 0 && !r.isJumping) {
       r.y += (0.85 - r.y) * Math.min(1, rawDt * 12);
     } else if (r.isJumping) {
       r.y += r.velY * rawDt;
-      r.velY -= 32 * rawDt;
+      r.velY -= (r.fastFalling ? 46 : 32) * rawDt;
+      r.jumpElapsed = (r.jumpElapsed || 0) + rawDt;
+      r.flipProgress = Math.max(0, Math.min(1, r.jumpElapsed / Math.max(0.32, r.jumpDurationEst || 0.6)));
       if (r.y <= 0) {
         r.y = 0;
         r.velY = 0;
         r.isJumping = false;
-        r.squashX = 1.2;
-        r.squashY = 0.8;
+        const wasSlam = r.fastFalling;
+        const wasFlip = r.flipType && r.flipType !== 'standard_jump';
+        r.fastFalling = false;
+        r.flipType = 'standard_jump';
+        r.flipProgress = 0;
+        r.squashX = wasSlam ? 1.3 : 1.2;
+        r.squashY = wasSlam ? 0.72 : 0.8;
+        r.camDipY = wasSlam ? -0.32 : wasFlip ? -0.2 : -0.14;
         audioEngine.playLand();
-        this.spawnAuraBurst(this.playerMesh.position, 5);
+        this.particles.emit('dust', { x: r.x, y: 0.08, z: 0.1 }, {
+          count: wasSlam ? 10 : 5,
+          colorStart: world.accent,
+          colorEnd: 0xffffff,
+          highGraphics: saveManager.data.settings.highGraphics,
+        });
       }
     } else {
-      r.y += (0 - r.y) * Math.min(1, rawDt * 14);
+      const hopArc = r.laneHopTimer > 0 ? Math.sin((r.laneHopTimer / 0.19) * Math.PI) * 0.28 : 0;
+      r.y += (hopArc - r.y) * Math.min(1, rawDt * 22);
     }
 
     // Smooth squash-and-stretch recovery
@@ -2244,12 +2593,16 @@ export class VoidRunEngine {
     const phased = r.voidwalkTimer > 0 || r.voidDomainTimer > 0 || r.eclipseVeilTimer > 0;
 
     // Rhythmic footfall dust/spark puffs on the track each time a boot plants!
-    if (!r.isJumping && r.slideTimer <= 0 && !saveManager.data.settings.reducedMotion) {
+    if (!r.isJumping && r.slideTimer <= 0 && r.surgeTimer <= 0 && r.voidlightTimer <= 0 && !saveManager.data.settings.reducedMotion) {
       const curSign = Math.sin(runCycle) >= 0 ? 1 : -1;
       if (curSign !== r.lastStrideSign) {
         r.lastStrideSign = curSign;
-        const footPos = new THREE.Vector3(r.x + curSign * 0.22, 0.08, 0.12);
-        this.spawnVfxBurst(footPos, this.getCurrentWorld().accent, 2);
+        this.particles.emit('dust', { x: r.x + curSign * 0.22, y: 0.08, z: 0.14 }, {
+          count: 3,
+          colorStart: this.getCurrentWorld().accent,
+          colorEnd: 0xffffff,
+          highGraphics: saveManager.data.settings.highGraphics,
+        });
       }
     }
 
@@ -2293,200 +2646,8 @@ export class VoidRunEngine {
       if (ud.castRingMesh) ud.castRingMesh.visible = false;
 
       if (useSkel) {
-        // === TRUE VOLUMETRIC RUNNING GAIT + 3-PHASE WEAPON ATTACK CHOREOGRAPHY ===
-        const s = Math.sin(runCycle);
-        const c = Math.cos(runCycle);
-        const speedNorm = Math.max(0, Math.min(1, (r.speed - 11) / 14));
-
-        ud.bodyPivot.position.y = 0;
-        ud.bodyPivot.rotation.set(0, -bankDiff * 0.34, -bankDiff * 0.26);
-        ud.bodyPivot.scale.set(r.squashX, r.squashY, 1);
-
-        // 1) BASE LOWER BODY & SPRINT GAIT (Runs continuously even during upper-body weapon slashes!)
-        if (r.slideTimer > 0) {
-          ud.hipsPivot.position.set(0, ud.hipBaseY * 0.46, 0);
-          ud.hipsPivot.rotation.set(0, 0, -bankDiff * 0.16);
-          ud.torsoPivot.rotation.set(0.55, 0, 0);
-          ud.headPivot.rotation.set(-0.32, 0, 0);
-
-          ud.lShoulderPivot.position.z = -0.02;
-          ud.rShoulderPivot.position.z = -0.02;
-          ud.lShoulderPivot.rotation.set(-0.28, 0, 0.14);
-          ud.lElbowPivot.rotation.set(-0.32, 0, -0.15);
-          ud.rShoulderPivot.rotation.set(-0.28, 0, -0.14);
-          ud.rElbowPivot.rotation.set(-0.32, 0, 0.15);
-
-          ud.lHipPivot.position.set(ud.lHipPivot.position.x, 0, -0.015);
-          ud.rHipPivot.position.set(ud.rHipPivot.position.x, 0, -0.015);
-          ud.lHipPivot.rotation.set(-0.62, 0, 0.08);
-          ud.lKneePivot.rotation.set(0.25, 0, 0);
-          ud.lHipPivot.scale.y = 0.86;
-          ud.lKneePivot.scale.y = 0.86;
-          ud.rHipPivot.rotation.set(-0.35, 0, -0.12);
-          ud.rKneePivot.rotation.set(0.75, 0, 0);
-          ud.rHipPivot.scale.y = 0.86;
-          ud.rKneePivot.scale.y = 0.78;
-        } else if (r.isJumping) {
-          ud.hipsPivot.position.set(0, ud.hipBaseY + 0.08, 0);
-          ud.hipsPivot.rotation.set(0, 0.14, -bankDiff * 0.18);
-          ud.torsoPivot.rotation.set(-0.24, -0.14, 0);
-          ud.headPivot.rotation.set(0.14, 0.08, 0);
-
-          // Arms throw high & wide during vault
-          ud.lShoulderPivot.position.z = -0.08;
-          ud.rShoulderPivot.position.z = -0.08;
-          ud.lShoulderPivot.rotation.set(-0.55, 0, -0.35);
-          ud.lElbowPivot.rotation.set(-0.48, 0, -0.25);
-          ud.rShoulderPivot.rotation.set(-0.45, 0, 0.35);
-          ud.rElbowPivot.rotation.set(-0.52, 0, 0.25);
-
-          // Left knee tucked high, right leg trailing with visible 3D boot heel!
-          ud.lHipPivot.position.y = 0.22;
-          ud.lHipPivot.rotation.set(-0.52, 0, 0.06);
-          ud.lHipPivot.scale.y = 0.84;
-          ud.lKneePivot.rotation.set(0.72, 0, 0);
-          ud.lKneePivot.scale.y = 0.86;
-
-          ud.rHipPivot.position.y = 0.06;
-          ud.rHipPivot.rotation.set(0.46, 0, -0.06);
-          ud.rHipPivot.scale.y = 0.92;
-          ud.rKneePivot.rotation.set(0.85, 0, 0);
-          ud.rKneePivot.scale.y = 0.84;
-        } else {
-          // === FULL-SPEED ATHLETIC RUNNING GAIT ===
-          // Hips: unmistakable springy push-off hop + lateral stride weight shift + pelvis rotation
-          ud.hipsPivot.position.set(s * 0.055, ud.hipBaseY + Math.abs(c) * (0.14 + speedNorm * 0.05), 0);
-          ud.hipsPivot.rotation.set(0, -s * 0.18, s * 0.08);
-
-          // Torso: bold forward sprint lean + strong alternating shoulder counter-twist!
-          const leanX = r.stumbleTimer > 0 ? 0.24 : (-0.22 - speedNorm * 0.12);
-          ud.torsoPivot.rotation.set(leanX, s * 0.34, -s * 0.09);
-
-          // Head: stabilizes gaze forward with subtle rhythmic stride nod
-          ud.headPivot.rotation.set(0.14 + Math.abs(c) * 0.05, -s * 0.18, s * 0.04);
-
-          // Arms & Hands: tucked cleanly beside ribs (no A-pose!) & visibly pumping UP/BACK and FORWARD!
-          // Kept inside ±0.58 rad X-tilt so volumetric forearms & hands stay bold and readable every frame!
-          const lArmDrive = -s; // Opposite to Left Leg
-          ud.lShoulderPivot.rotation.set(lArmDrive * 0.56, 0, 0.46 - lArmDrive * 0.18);
-          ud.lShoulderPivot.position.z = -0.02 + lArmDrive * 0.16;
-          ud.lElbowPivot.rotation.set(-0.48 - Math.max(0, lArmDrive) * 0.26, 0, -0.22 - lArmDrive * 0.32);
-
-          const rArmDrive = s; // Opposite to Right Leg
-          ud.rShoulderPivot.rotation.set(rArmDrive * 0.56, 0, -0.46 + rArmDrive * 0.18);
-          ud.rShoulderPivot.position.z = -0.02 + rArmDrive * 0.16;
-          ud.rElbowPivot.rotation.set(-0.48 - Math.max(0, rArmDrive) * 0.26, 0, 0.22 + rArmDrive * 0.32);
-
-          // 2-Joint Legs + 3D Boot Soles: bold knee-drive lift & unmistakable boot kick-back!
-          const lFwd = Math.max(0, s);
-          const lBack = Math.max(0, -s);
-          ud.lHipPivot.position.y = lFwd * 0.20 + lBack * 0.11;
-          ud.lHipPivot.rotation.set(-s * 0.56, 0, 0.04);
-          ud.lHipPivot.scale.y = 1.0 - lBack * 0.12 - lFwd * 0.08;
-          ud.lKneePivot.rotation.set(0.18 + lBack * 0.92 + Math.max(0, c) * 0.36, 0, 0);
-          ud.lKneePivot.scale.y = 1.0 - lBack * 0.18;
-
-          const rFwd = Math.max(0, -s);
-          const rBack = Math.max(0, s);
-          ud.rHipPivot.position.y = rFwd * 0.20 + rBack * 0.11;
-          ud.rHipPivot.rotation.set(s * 0.56, 0, -0.04);
-          ud.rHipPivot.scale.y = 1.0 - rBack * 0.12 - rFwd * 0.08;
-          ud.rKneePivot.rotation.set(0.18 + rBack * 0.92 + Math.max(0, -c) * 0.36, 0, 0);
-          ud.rKneePivot.scale.y = 1.0 - rBack * 0.18;
-        }
-
-        // 2) UPPER-BODY 3-PHASE HERO ATTACK OVERRIDE (Wind-up -> Explosive Lunge & Slash -> Recovery!)
-        if (ud.rWeaponMesh) {
-          ud.rWeaponMesh.scale.setScalar(isAttacking ? 1.24 : 0.88);
-          ud.rWeaponMesh.rotation.set(-0.85, 0, -0.35);
-        }
-        if (ud.lWeaponMesh) {
-          ud.lWeaponMesh.scale.setScalar(isAttacking ? 1.24 : 0.88);
-        }
-
-        if (isAttacking) {
-          const dir = r.attackComboSide || 1;
-          // Smooth 3-phase curve: windup (0..0.24), active slash (0.24..0.68), recovery (0.68..1.0)
-          let swing = 0; // -1 = wound up back, +1 = whipped through forward
-          let slashVis = false;
-          let slashProg = 0;
-          if (atkP < 0.24) {
-            swing = -(atkP / 0.24);
-          } else if (atkP < 0.68) {
-            slashProg = (atkP - 0.24) / 0.44;
-            swing = -1 + 2 * (1 - Math.pow(1 - slashProg, 3));
-            slashVis = true;
-          } else {
-            const rec = (atkP - 0.68) / 0.32;
-            swing = 1 - rec;
-          }
-
-          if (r.attackType === 'slam') {
-            // BRANN KEST: Two-handed Overhead Warhammer Power Slam!
-            ud.torsoPivot.rotation.x = -0.18 + swing * 0.46;
-            ud.torsoPivot.rotation.y = -0.22 * swing;
-            ud.rShoulderPivot.rotation.set(-0.55 + swing * 0.85, 0, 1.05 - swing * 1.35);
-            ud.rElbowPivot.rotation.set(-0.35, 0, 0.25 - swing * 0.3);
-            ud.lShoulderPivot.rotation.set(-0.45 + swing * 0.75, 0, -0.85 + swing * 1.15);
-            ud.lElbowPivot.rotation.set(-0.35, 0, -0.25);
-            if (ud.rWeaponMesh) ud.rWeaponMesh.rotation.set(-0.3 + swing * 1.15, 0, 0);
-          } else if (r.attackType === 'twin') {
-            // NYX ADERYN: Blistering X-Cross Twin-Fang Double-Hand Slash!
-            ud.torsoPivot.rotation.x = -0.34;
-            ud.torsoPivot.rotation.y = swing * 0.45 * dir;
-            ud.rShoulderPivot.rotation.set(-0.45 - swing * 0.35, 0, -0.85 + swing * 1.45);
-            ud.rElbowPivot.rotation.set(-0.35, 0, -0.45 + swing * 0.95);
-            ud.lShoulderPivot.rotation.set(-0.45 - swing * 0.35, 0, 0.85 - swing * 1.45);
-            ud.lElbowPivot.rotation.set(-0.35, 0, 0.45 - swing * 0.95);
-          } else if (r.attackType === 'thrust') {
-            // ELARA VEY: Arcane Runic Staff Sweep & Energy Burst Thrust!
-            ud.torsoPivot.rotation.x = -0.28;
-            ud.torsoPivot.rotation.y = -0.58 * swing;
-            ud.rShoulderPivot.rotation.set(-0.62, 0, 0.25 - swing * 0.85);
-            ud.rElbowPivot.rotation.set(-0.22, 0, 0.35 - swing * 0.65);
-            ud.lShoulderPivot.rotation.set(-0.35, 0, 0.35);
-            if (ud.castRingMesh && slashVis) {
-              ud.castRingMesh.visible = true;
-              const cs = 0.6 + slashProg * 1.1;
-              ud.castRingMesh.scale.set(cs, cs, 1);
-              ud.castRingMesh.rotation.z = slashProg * 4.5;
-            }
-          } else if (r.attackType === 'cast') {
-            // VOID POWER CAST: Dramatic Forward Arm Thrust + Expanding Holographic Sigil Ring!
-            ud.torsoPivot.rotation.x = -0.28;
-            ud.torsoPivot.rotation.y = -0.42 * swing;
-            ud.rShoulderPivot.rotation.set(-0.68, 0, -0.15);
-            ud.rElbowPivot.rotation.set(-0.2, 0, 0.15);
-            ud.lShoulderPivot.rotation.set(-0.55, 0, 0.22);
-            if (ud.castRingMesh) {
-              ud.castRingMesh.visible = true;
-              const cs = 0.55 + atkP * 1.35;
-              ud.castRingMesh.scale.set(cs, cs, 1);
-              ud.castRingMesh.rotation.z = atkP * 5.2;
-              ud.castRingMesh.material.opacity = Math.max(0, 1 - atkP * 0.9);
-            }
-          } else {
-            // MILLER REDWOLF & SWORD COMBO: Wide 180° Forehand / Backhand Void Blade Slash!
-            ud.torsoPivot.rotation.x = -0.28;
-            ud.torsoPivot.rotation.y = -swing * 0.82 * dir;
-            ud.torsoPivot.rotation.z = -swing * 0.16 * dir;
-            ud.rShoulderPivot.rotation.set(-0.55, 0, (dir > 0 ? 0.65 - swing * 1.45 : -0.75 + swing * 1.35));
-            ud.rElbowPivot.rotation.set(-0.28, 0, -swing * 0.65 * dir);
-            ud.lShoulderPivot.rotation.set(0.32, 0, 0.55);
-            if (ud.rWeaponMesh) ud.rWeaponMesh.rotation.set(-0.5, 0, -0.9 * swing * dir);
-          }
-
-          // Sweep glowing 3D Crescent Blade Slash Ribbon across the attack arc!
-          if (ud.slashArcMesh && slashVis && r.attackType !== 'cast') {
-            ud.slashArcMesh.visible = true;
-            ud.slashArcMat.color.setHex(r.gear.weapon?.color || 0x4cf3ff);
-            ud.slashArcMat.opacity = Math.sin(slashProg * Math.PI) * 0.92;
-            const sc = 0.85 + slashProg * 0.45;
-            ud.slashArcMesh.scale.set(sc * dir, sc, 1);
-            ud.slashArcMesh.rotation.z = (-0.9 + slashProg * 2.4) * dir;
-            ud.slashArcMesh.rotation.x = r.attackType === 'slam' ? 0.15 : Math.PI * 0.44;
-          }
-        }
+        // Apply unified 8-video MotionController state machine & pose blender!
+        MotionController.applyRigMotion(ud, r, now, rawDt);
       } else {
         // Brief fallback animation while sprite image loads (<2ms)
         ud.bodyPivot.position.y = Math.abs(Math.cos(runCycle)) * 0.1;
@@ -2502,24 +2663,7 @@ export class VoidRunEngine {
         else m.color.set(ud.baseTint);
       }
     } else {
-      // Procedural 3D Ally Runners: enhanced sprint bounce + torso counter-twist + full attack slash!
-      const s = Math.sin(runCycle);
-      const c = Math.cos(runCycle);
-      if (r.slideTimer > 0) {
-        ud.bodyPivot.position.y = 0;
-        ud.bodyPivot.scale.set(1.12, 0.48, 1.08);
-        ud.bodyPivot.rotation.set(-0.38, 0, (r.x - r.targetX) * 0.25);
-      } else {
-        ud.bodyPivot.position.y = r.isJumping ? 0 : Math.abs(c) * 0.13;
-        ud.bodyPivot.scale.set(r.squashX, r.squashY, 1);
-        const atkTwist = isAttacking ? Math.sin(atkP * Math.PI) * 0.95 * (r.attackComboSide || 1) : 0;
-        ud.bodyPivot.rotation.set(r.stumbleTimer > 0 ? 0.3 : 0.18, s * 0.22 - atkTwist, (r.x - r.targetX) * 0.32);
-        ud.legL.rotation.x = r.isJumping ? 0.65 : s * 1.05;
-        ud.legR.rotation.x = r.isJumping ? -0.55 : -s * 1.05;
-        ud.armL.rotation.x = isAttacking ? 0.5 : -s * 0.95;
-        ud.armR.rotation.x = isAttacking ? (-1.45 + atkP * 2.2) : s * 0.95;
-        ud.armR.rotation.z = isAttacking ? -0.65 * Math.sin(atkP * Math.PI) : 0;
-      }
+      MotionController.applyRigMotion(ud, r, now, rawDt);
       if (ud.scarf) ud.scarf.rotation.x = 0.45 + Math.sin(runCycle * 1.4) * 0.28;
       ud.matBody.transparent = phased;
       ud.matBody.opacity = phased ? 0.42 : 1.0;
@@ -2530,41 +2674,43 @@ export class VoidRunEngine {
       const fScale = Math.max(0.55, 1 - r.y * 0.22);
       ud.footRing.scale.set(fScale, fScale, 1);
     }
+    if (ud.shadowBlob) {
+      ud.shadowBlob.position.y = -r.y + 0.03;
+      const sScale = Math.max(0.45, 1 - r.y * 0.24);
+      ud.shadowBlob.scale.set(sScale, sScale, 1);
+      ud.shadowBlob.material.opacity = Math.max(0.18, 0.65 - r.y * 0.18);
+    }
 
     ud.shieldMesh.visible = r.shieldHits > 0 || r.barrierHits > 0 || r.armorDeflects > 0 || r.chronalHavenTimer > 0 || r.voidlightTimer > 0;
     ud.shieldMesh.rotation.y += rawDt * 2.8;
     ud.orbGroup.visible = saveManager.data.codexLevel >= 55 && r.voidResonanceTimer <= 0;
     ud.orbGroup.rotation.y += rawDt * 3.4;
 
-    // Emit custom Void Trail particles behind the runner!
+    // Emit custom Void Trail particles via object-pooled ParticleSystem!
     r.trailTick += rawDt;
-    const trailRate = saveManager.data.settings.highGraphics ? 0.032 : 0.07;
+    const trailRate = saveManager.data.settings.highGraphics ? 0.035 : 0.075;
     if (r.trailTick >= trailRate && !saveManager.data.settings.reducedMotion) {
       r.trailTick = 0;
       const tr = r.trailData || TRAILS[0];
       const tCol = tr.rainbow ? RAINBOW_HEX[Math.floor(now * 0.008) % RAINBOW_HEX.length] : tr.color;
-      const m = new THREE.Mesh(
-        this.sharedTrailGeo,
-        new THREE.MeshBasicMaterial({ color: tCol, transparent: true, opacity: 0.85 })
-      );
-      m.position.set(r.x + (Math.random() - 0.5) * 0.34, r.y + 0.28 + Math.random() * 0.45, 0.35);
-      this.runGroup.add(m);
-      this.trailParticles.push({ mesh: m, life: 0.32, maxLife: 0.32 });
+      this.particles.emit('trail', { x: r.x, y: r.y + 0.45, z: 0.32 }, {
+        count: 1,
+        colorStart: tCol,
+        colorEnd: 0x4cf3ff,
+        jitter: 0.32,
+        highGraphics: saveManager.data.settings.highGraphics,
+      });
     }
+    // Update sprite afterimage silhouettes
     for (let i = this.trailParticles.length - 1; i >= 0; i--) {
       const tp = this.trailParticles[i];
       tp.life -= rawDt;
       tp.mesh.position.z += r.speed * worldDt * 0.85;
       const s = Math.max(0.05, tp.life / tp.maxLife);
-      if (tp.isAfterimage) {
-        tp.mesh.material.opacity = s * 0.42;
-      } else {
-        tp.mesh.scale.set(s, s, s);
-        tp.mesh.material.opacity = s * 0.85;
-      }
+      tp.mesh.material.opacity = s * 0.42;
       if (tp.life <= 0) {
         this.runGroup.remove(tp.mesh);
-        if (tp.isAfterimage) tp.mesh.geometry.dispose();
+        tp.mesh.geometry.dispose();
         tp.mesh.material.dispose();
         this.trailParticles.splice(i, 1);
       }
@@ -2630,14 +2776,57 @@ export class VoidRunEngine {
         this.spawnAuraBurst(o.mesh.position, 8);
       }
 
+      // Interactive Motion Set-Piece Props: Launch Ramp, Wall-Run Panel, Climb Wall & Updraft Column!
+      if (!o.hit && o.type === 'wall_panel' && Math.abs(o.z) < 3.1 && o.lane === r.lane) {
+        o.hit = true;
+        r.wallRunTimer = 1.18;
+        r.wallRunSide = o.lane === 0 ? -1 : 1;
+        r.isJumping = false;
+        r.slideTimer = 0;
+        r.motionCounts.wall_run = (r.motionCounts.wall_run || 0) + 1;
+        this.addScore(115, '🧱 WALL-RUN LATCH!', '#00E5FF');
+        this.spawnAuraBurst(this.playerMesh.position, 10);
+        audioEngine.playJump();
+        continue;
+      }
+      if (!o.hit && o.type === 'launch_ramp' && Math.abs(o.z) < 1.05 && Math.abs(r.x - o.mesh.position.x) < 0.62) {
+        o.hit = true;
+        this.tryJump(true);
+        continue;
+      }
+      if (!o.hit && o.type === 'climb_wall' && Math.abs(o.z) < 0.95 && Math.abs(r.x - o.mesh.position.x) < 0.6) {
+        o.hit = true;
+        r.climbDuration = 0.82;
+        r.climbTimer = 0.82;
+        r.isJumping = false;
+        r.slideTimer = 0;
+        r.motionCounts.climb = (r.motionCounts.climb || 0) + 1;
+        this.addScore(140, '🧗 ASCENT & MANTLE!', '#3DFF7A');
+        this.spawnAuraBurst(this.playerMesh.position, 12);
+        audioEngine.playJump();
+        continue;
+      }
+      if (!o.hit && o.type === 'updraft_column' && Math.abs(o.z) < 1.15 && Math.abs(r.x - o.mesh.position.x) < 0.68) {
+        o.hit = true;
+        r.paragliderTimer = 2.8;
+        r.isJumping = false;
+        r.slideTimer = 0;
+        r.motionCounts.paraglider = (r.motionCounts.paraglider || 0) + 1;
+        this.addScore(130, '🪂 PARAGLIDER UPDRAFT!', '#4CF3FF');
+        this.spawnAuraBurst(this.playerMesh.position, 14);
+        audioEngine.playBonusRing();
+        continue;
+      }
+
       if (!o.hit && Math.abs(o.z) < 0.78) {
         const dx = Math.abs(r.x - o.mesh.position.x);
         const laneHit = o.type === 'sonic_low' || o.type === 'sonic_high' ? true : dx < 0.52;
         if (laneHit) {
           let verticalHit = true;
-          if ((o.type === 'ground' || o.type === 'sonic_low') && (r.y > 0.7 || r.stillstepTimer > 0)) verticalHit = false;
+          if ((o.type === 'ground' || o.type === 'sonic_low') && (r.y > 0.7 || r.stillstepTimer > 0 || r.wallRunTimer > 0 || r.climbTimer > 0 || r.paragliderTimer > 0)) verticalHit = false;
           if ((o.type === 'overhead' || o.type === 'sonic_high') && r.slideTimer > 0) verticalHit = false;
-          if (o.type === 'hazard_floor' && r.y > 0.35) verticalHit = false;
+          if (o.type === 'hazard_floor' && (r.y > 0.35 || r.wallRunTimer > 0 || r.climbTimer > 0 || r.paragliderTimer > 0)) verticalHit = false;
+          if ((r.climbTimer > 0 || r.paragliderTimer > 0) && o.type === 'tall') verticalHit = false;
 
           if (verticalHit) {
             o.hit = true;
@@ -2712,7 +2901,7 @@ export class VoidRunEngine {
           r.vs += val;
           r.ve = Math.min(r.maxVE, r.ve + 2);
           this.addScore(25);
-          this.spawnVfxBurst(col.mesh.position, 0x00e5ff, 4);
+          this.spawnVfxBurst(col.mesh.position, 0x4cf3ff, 5, 'pickup');
           audioEngine.playShard();
         } else if (col.kind === 'bonus_ring') {
           r.bonusRings += 1;
@@ -2720,7 +2909,12 @@ export class VoidRunEngine {
           r.ve = Math.min(r.maxVE, r.ve + 22);
           r.bonusHighwayTimer = 4.5;
           r.multiplier = Math.min(8, r.multiplier + 1);
-          this.addScore(r.charId === 'elara' ? 700 : 500, '🎯 GOLDEN RIFT BONUS!', '#FFD84D');
+          if (r.isJumping) {
+            r.flipType = 'back_flip';
+            r.flipProgress = 0;
+            r.motionCounts.flip = (r.motionCounts.flip || 0) + 1;
+          }
+          this.addScore(r.charId === 'elara' ? 700 : 500, '🎯 GOLDEN RIFT BACKFLIP!', '#FFD84D');
           this.spawnFireworks(col.mesh.position);
           audioEngine.playBonusRing();
           NativeBridge.vibrate(45);
@@ -2772,19 +2966,13 @@ export class VoidRunEngine {
       }
     }
 
-    // Update burst particles
-    for (let i = this.vfxBursts.length - 1; i >= 0; i--) {
-      const p = this.vfxBursts[i];
-      p.life -= rawDt;
-      p.mesh.position.x += p.vx * rawDt;
-      p.mesh.position.y += p.vy * rawDt;
-      p.mesh.position.z += p.vz * rawDt;
-      p.vy -= 12 * rawDt;
-      if (p.life <= 0) {
-        this.runGroup.remove(p.mesh);
-        this.vfxBursts.splice(i, 1);
-      }
-    }
+    // Step all pooled particles (pickups, collisions, footstep dust, trails, boost streaks & per-world ambient motes!)
+    this.particles.update(rawDt, worldDt, r.speed, world.id, {
+      highGraphics: saveManager.data.settings.highGraphics,
+      reducedMotion: saveManager.data.settings.reducedMotion,
+      isBoosted: r.speed > 17 || r.surgeTimer > 0 || r.voidlightTimer > 0 || r.bonusHighwayTimer > 0,
+      boostColor: r.voidlightTimer > 0 ? 0xffd84d : world.accent,
+    });
 
     // Best Moment frame buffer
     r.frameCaptureTick += rawDt;
@@ -2805,9 +2993,19 @@ export class VoidRunEngine {
       hype: r.bonusHighwayTimer > 0 || r.surgeTimer > 0 || r.multiplier >= 4 ? 0.8 : 0,
     });
 
-    // Dynamic Arcade Camera + Speed FOV Surge
+    // Dynamic Arcade Camera + Aligned Set-Piece Scene Framing (Cam Height, FOV, Wall-Run Roll & Climb Pitch!)
     const reduced = saveManager.data.settings.reducedMotion;
-    const targetFov = reduced ? 62 : Math.min(76, 61 + Math.max(0, r.speed - 12) * 0.9 + (r.surgeTimer > 0 || r.voidlightTimer > 0 ? 6 : 0));
+    const scCam = r.activeMotionScene?.camera || { camYOffset: 0, fovOffset: 0, rollMult: 1, lookYOffset: 0 };
+    const isGlidingNow = (r.paragliderTimer || 0) > 0 || r.surgeTimer > 0 || r.voidlightTimer > 0;
+    const targetFov = reduced
+      ? 62
+      : Math.min(
+          78,
+          61 +
+            (scCam.fovOffset || 0) +
+            Math.max(0, r.speed - 12) * 0.9 +
+            (isGlidingNow ? 6 : 0)
+        );
     this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, rawDt * 6);
     this.camera.updateProjectionMatrix();
 
@@ -2818,11 +3016,56 @@ export class VoidRunEngine {
       shakeX = (Math.random() - 0.5) * r.cameraShake;
       shakeY = (Math.random() - 0.5) * r.cameraShake;
     }
-    this.camera.position.set(r.x * 0.44 + shakeX, 3.65 + r.y * 0.24 + shakeY, 5.55);
-    this.camera.lookAt(r.x * 0.24, 1.25 + r.y * 0.15, -12.0);
+    // Dynamic audio-visual rim-light flash decay (synced to strikes, powers & stumbles!)
+    if (r.lightFlashTimer > 0) {
+      r.lightFlashTimer = Math.max(0, r.lightFlashTimer - rawDt);
+      const pulse = Math.min(1, r.lightFlashTimer / 0.24);
+      this.rimLight.color.setHex(r.lightFlashColor);
+      this.rimLight.intensity = 2.8 + pulse * 3.4;
+    } else {
+      this.rimLight.color.setHex(world.rimColor);
+      this.rimLight.intensity += (2.8 - this.rimLight.intensity) * Math.min(1, rawDt * 8);
+    }
+    this.rimLight.position.set(r.x, 4.2 + r.y * 0.4, 3.6);
 
-    // Active Power-Up Countdown Pills for HUD
+    // Smooth elastic follow-camera tracking lane X, jump/glide/climb Y, landing dip & wall-run bank roll!
+    r.camDipY += (0 - r.camDipY) * Math.min(1, rawDt * 12);
+    const targetCamX = r.x * 0.52;
+    const motionCamYBonus = isGlidingNow ? 0.55 : (r.climbTimer || 0) > 0 ? 0.35 : r.slideTimer > 0 ? -0.35 : 0;
+    const targetCamY = 3.6 + (scCam.camYOffset || 0) + motionCamYBonus + r.y * 0.56 + r.camDipY;
+    const wallRollBonus = (r.wallRunTimer || 0) > 0 ? -r.wallRunSide * 0.085 : 0;
+    const targetRoll = reduced
+      ? 0
+      : Math.max(-0.11, Math.min(0.11, (r.x - r.targetX) * 0.035 * (scCam.rollMult || 1) + wallRollBonus));
+    r.camX += (targetCamX - r.camX) * Math.min(1, rawDt * 10);
+    r.camY += (targetCamY - r.camY) * Math.min(1, rawDt * 8);
+    r.camRoll += (targetRoll - r.camRoll) * Math.min(1, rawDt * 11);
+    this.camera.position.set(r.camX + shakeX, r.camY + shakeY, 5.55);
+    const climbLookBonus = (r.climbTimer || 0) > 0 ? 0.85 : 0;
+    this.camera.lookAt(r.camX * 0.52, 1.25 + (scCam.lookYOffset || 0) + climbLookBonus + r.y * 0.35, -12.0);
+    this.camera.rotation.z += r.camRoll;
+
+    // Determine active motion label for HUD telemetry
+    r.activeMotionState =
+      (r.climbTimer || 0) > 0
+        ? 'climb'
+        : isGlidingNow
+        ? 'paraglider'
+        : (r.wallRunTimer || 0) > 0
+        ? 'wall_run'
+        : r.slideTimer > 0
+        ? r.rollVariant || 'roll'
+        : r.isJumping
+        ? r.flipType || 'flip'
+        : r.attackAnimTimer > 0
+        ? r.attackType
+        : 'locomotion';
+
+    // Active Power-Up & Motion State Countdown Pills for HUD
     const activeBuffs = [];
+    if (r.paragliderTimer > 0) activeBuffs.push({ icon: '🪂', label: `GLIDE ${r.paragliderTimer.toFixed(1)}s`, color: '#4CF3FF' });
+    if (r.wallRunTimer > 0) activeBuffs.push({ icon: '🧱', label: `WALL ${r.wallRunTimer.toFixed(1)}s`, color: '#00E5FF' });
+    if (r.climbTimer > 0) activeBuffs.push({ icon: '🧗', label: 'CLIMB', color: '#3DFF7A' });
     if (r.magnetTimer > 0) activeBuffs.push({ icon: '🧲', label: `${Math.ceil(r.magnetTimer)}s`, color: '#00E5FF' });
     if (r.doubleTimer > 0) activeBuffs.push({ icon: '💎2×', label: `${Math.ceil(r.doubleTimer)}s`, color: '#FFD84D' });
     if (r.surgeTimer > 0) activeBuffs.push({ icon: '☄️', label: `${Math.ceil(r.surgeTimer)}s`, color: '#FFFFFF' });
@@ -2880,6 +3123,8 @@ export class VoidRunEngine {
       timeBleed: r.timeBleedTimer > 0,
       voidDomain: r.voidDomainTimer > 0,
       infested: r.infestedTimer > 0,
+      activeMotionScene: r.activeMotionScene,
+      activeMotionState: r.activeMotionState,
     });
   }
 }

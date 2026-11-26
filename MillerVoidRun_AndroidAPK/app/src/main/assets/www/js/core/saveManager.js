@@ -4,6 +4,8 @@
 import {
   VOID_POWERS,
   CHARACTERS,
+  PLAYER_SLOT_DEFINITIONS,
+  DEFAULT_UNLOCKED_CHAR_IDS,
   SKILL_TREE,
   WORLDS,
   CONSUMABLES,
@@ -69,13 +71,12 @@ function createDefaultSave() {
     totalEnemiesDefeated: 0,
     totalPlaySeconds: 0,
     selectedChar: 'miller',
-    unlockedChars: ['miller', 'brann', 'elara', 'nyx'],
-    heroProgress: {
-      miller: { level: 1, xp: 0 },
-      brann: { level: 1, xp: 0 },
-      elara: { level: 1, xp: 0 },
-      nyx: { level: 1, xp: 0 },
-    },
+    activeSlotIndex: 0,
+    playerSlots: PLAYER_SLOT_DEFINITIONS.map((s) => s.defaultCharId),
+    unlockedChars: [...DEFAULT_UNLOCKED_CHAR_IDS],
+    heroProgress: Object.fromEntries(
+      DEFAULT_UNLOCKED_CHAR_IDS.map((cid) => [cid, { level: 1, xp: 0 }])
+    ),
     equippedWeapon: 'steel_blade',
     equippedArmor: 'hunter_coat',
     equippedRelic: 'guild_tag',
@@ -83,7 +84,7 @@ function createDefaultSave() {
     unlockedArmors: ['hunter_coat'],
     unlockedRelics: ['guild_tag'],
     selectedSkin: 'default',
-    unlockedSkins: ['default'],
+    unlockedSkins: ['default', 'void_wolf_mask'],
     selectedTrail: 'violet_spark',
     unlockedTrails: ['violet_spark'],
     selectedAura: 'standard',
@@ -174,11 +175,45 @@ class SaveManager {
       const raw = localStorage.getItem(SAVE_KEY);
       if (!raw) return def;
       const parsed = JSON.parse(raw);
-      const mergedChars = Array.from(new Set([...(parsed.unlockedChars || []), 'miller', 'brann', 'elara', 'nyx']));
+      const mergedChars = Array.from(new Set([...(parsed.unlockedChars || []), ...DEFAULT_UNLOCKED_CHAR_IDS]));
+      const mergedSkins = Array.from(new Set([...(parsed.unlockedSkins || []), 'default', 'void_wolf_mask']));
+      // Deduplicate & validate saved playerSlots strictly on load (1 unique character per slot)
+      const slotCount = PLAYER_SLOT_DEFINITIONS.length;
+      const unlockedSet = new Set(mergedChars);
+      const validIds = new Set(CHARACTERS.map((c) => c.id));
+      const cleanSlots = new Array(slotCount).fill(null);
+      const seenSlots = new Set();
+      if (Array.isArray(parsed.playerSlots)) {
+        for (let i = 0; i < slotCount; i++) {
+          const cid = parsed.playerSlots[i];
+          if (cid && validIds.has(cid) && unlockedSet.has(cid) && !seenSlots.has(cid)) {
+            cleanSlots[i] = cid;
+            seenSlots.add(cid);
+          }
+        }
+      }
+      // Fill any empty default slots from newly-added SharedArt characters without duplicating existing assignments
+      for (let i = 0; i < slotCount; i++) {
+        const defCid = PLAYER_SLOT_DEFINITIONS[i].defaultCharId;
+        if (!cleanSlots[i] && defCid && unlockedSet.has(defCid) && !seenSlots.has(defCid)) {
+          cleanSlots[i] = defCid;
+          seenSlots.add(defCid);
+        }
+      }
+      if (cleanSlots.every((x) => !x)) cleanSlots[0] = 'miller';
+      let activeIdx = Number.isInteger(parsed.activeSlotIndex) ? parsed.activeSlotIndex : cleanSlots.indexOf(parsed.selectedChar);
+      if (activeIdx < 0 || activeIdx >= slotCount || !cleanSlots[activeIdx]) {
+        activeIdx = Math.max(0, cleanSlots.findIndex(Boolean));
+      }
+      const activeChar = cleanSlots[activeIdx] || 'miller';
       return {
         ...def,
         ...parsed,
+        selectedChar: activeChar,
+        activeSlotIndex: activeIdx,
+        playerSlots: cleanSlots,
         unlockedChars: mergedChars,
+        unlockedSkins: mergedSkins,
         settings: { ...def.settings, ...(parsed.settings || {}) },
         consumableStock: { ...def.consumableStock, ...(parsed.consumableStock || {}) },
         abilityTiers: { ...def.abilityTiers, ...(parsed.abilityTiers || {}) },

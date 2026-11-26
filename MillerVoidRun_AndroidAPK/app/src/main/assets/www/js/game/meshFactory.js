@@ -2,13 +2,43 @@
 // Generates procedural neon-lit CanvasTextures per world, atmospheric gradient sky domes,
 // glowing Golden Bonus Rift Rings, readable obstacles with warning chevrons, and fluid runner rigs.
 
-import { CHARACTERS, CHASERS, BOSSES, SKINS, PALETTE, PORTAL_ENEMIES } from '../config/gameData.js';
+import { CHARACTERS, CHASERS, BOSSES, SKINS, PALETTE, PORTAL_ENEMIES, resolveCharacterArt } from '../config/gameData.js';
 
 const trackTextureCache = new Map();
 const skyTextureCache = new Map();
 const spriteTextureCache = new Map();
 const skeletalPartsCache = new Map();
 const environTextureCache = new Map();
+let contactShadowTex = null;
+
+// Soft radial-gradient grounded contact shadow texture (allocated once & shared across all meshes!)
+export function createContactShadow(THREE, radius = 0.72, opacity = 0.58) {
+  if (!contactShadowTex) {
+    const c = document.createElement('canvas');
+    c.width = 64;
+    c.height = 64;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(32, 32, 4, 32, 32, 30);
+    g.addColorStop(0, 'rgba(2, 4, 12, 0.92)');
+    g.addColorStop(0.55, 'rgba(4, 8, 22, 0.45)');
+    g.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 64, 64);
+    contactShadowTex = new THREE.CanvasTexture(c);
+  }
+  const m = new THREE.Mesh(
+    new THREE.PlaneGeometry(radius * 2, radius * 2),
+    new THREE.MeshBasicMaterial({
+      map: contactShadowTex,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+    })
+  );
+  m.rotation.x = -Math.PI / 2;
+  m.position.y = 0.03;
+  return m;
+}
 
 // Per-hero anatomical landmarks (normalized 0..1 top-down on 512x512 transparent back sprite)
 // Measured directly from miller_back.png, brann_back.png, elara_back.png, nyx_back.png
@@ -37,10 +67,30 @@ const HERO_RIG_LAYOUT = {
     rShoulder: [0.59, 0.25], rElbow: [0.69, 0.37], rCut: [[0.59, 0.21], [0.60, 0.35], [0.68, 0.52]],
     hipY: 0.54, kneeY: 0.72, midX: 0.495, legMinX: 0.35,
   },
+  // Balanced humanoid default for newly-extracted SharedArt/characters sheets (leonard, precious, rumbidzai, harry, felix, miller_wolf)
+  standard_sheet: {
+    neckY: 0.18, headX0: 0.41, headX1: 0.59,
+    lShoulder: [0.39, 0.24], lElbow: [0.33, 0.38], lCut: [[0.40, 0.19], [0.39, 0.36], [0.34, 0.53]],
+    rShoulder: [0.61, 0.24], rElbow: [0.67, 0.38], rCut: [[0.60, 0.19], [0.61, 0.36], [0.66, 0.53]],
+    hipY: 0.54, kneeY: 0.74, midX: 0.50, legMinX: 0.35,
+  },
+  // Heavy armored tank layout for Alton Dam & James Stole
+  alton: {
+    neckY: 0.19, headX0: 0.40, headX1: 0.60,
+    lShoulder: [0.31, 0.27], lElbow: [0.22, 0.42], lCut: [[0.34, 0.20], [0.33, 0.38], [0.26, 0.55]],
+    rShoulder: [0.69, 0.27], rElbow: [0.78, 0.42], rCut: [[0.66, 0.20], [0.67, 0.38], [0.74, 0.55]],
+    hipY: 0.57, kneeY: 0.75, midX: 0.50, legMinX: 0.31,
+  },
+  james: {
+    neckY: 0.18, headX0: 0.41, headX1: 0.59,
+    lShoulder: [0.35, 0.25], lElbow: [0.28, 0.39], lCut: [[0.37, 0.20], [0.36, 0.37], [0.31, 0.54]],
+    rShoulder: [0.65, 0.25], rElbow: [0.72, 0.39], rCut: [[0.63, 0.20], [0.64, 0.37], [0.69, 0.54]],
+    hipY: 0.55, kneeY: 0.74, midX: 0.50, legMinX: 0.33,
+  },
 };
 
 function sliceSkeletalPartsFromImage(THREE, heroId, img) {
-  const layout = HERO_RIG_LAYOUT[heroId] || HERO_RIG_LAYOUT.miller;
+  const layout = HERO_RIG_LAYOUT[heroId] || HERO_RIG_LAYOUT.standard_sheet;
   const S = 512;
 
   const makePartTex = (drawMaskFn) => {
@@ -205,35 +255,34 @@ function sliceSkeletalPartsFromImage(THREE, heroId, img) {
   };
 }
 
-function getSkeletalParts(THREE, charData, onReady) {
-  const key = charData.id;
-  if (skeletalPartsCache.has(key)) {
-    const cached = skeletalPartsCache.get(key);
+function getSkeletalParts(THREE, cacheKey, backSpriteUrl, onReady) {
+  if (skeletalPartsCache.has(cacheKey)) {
+    const cached = skeletalPartsCache.get(cacheKey);
     if (cached.ready) onReady(cached.data);
     else cached.waiters.push(onReady);
     return;
   }
   const entry = { ready: false, data: null, waiters: [onReady] };
-  skeletalPartsCache.set(key, entry);
+  skeletalPartsCache.set(cacheKey, entry);
 
   const img = new Image();
   img.onload = () => {
-    entry.data = sliceSkeletalPartsFromImage(THREE, key, img);
+    entry.data = sliceSkeletalPartsFromImage(THREE, cacheKey, img);
     entry.ready = true;
     for (const fn of entry.waiters) fn(entry.data);
     entry.waiters = [];
   };
-  img.src = charData.sprites.back;
+  img.src = backSpriteUrl;
 }
 
-function createHeroHandWeapon(THREE, heroId, accentHex, isOffhand = false) {
+function createHeroHandWeapon(THREE, weaponType, accentHex, isOffhand = false) {
   const g = new THREE.Group();
   const steelMat = new THREE.MeshStandardMaterial({ color: 0xc8d4e8, roughness: 0.25, metalness: 0.85 });
   const darkMat = new THREE.MeshStandardMaterial({ color: 0x1b1e2c, roughness: 0.5, metalness: 0.5 });
   const glowMat = new THREE.MeshBasicMaterial({ color: accentHex });
 
-  if (heroId === 'brann') {
-    // Heavy Forged Warhammer with glowing molten ember core!
+  if (weaponType === 'hammer') {
+    // Heavy Forged Warhammer / Seismic Crusher with glowing core
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 1.05, 7), darkMat);
     shaft.position.y = 0.35;
     const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.26, 0.26), steelMat);
@@ -241,8 +290,8 @@ function createHeroHandWeapon(THREE, heroId, accentHex, isOffhand = false) {
     const core = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.1, 0.14), glowMat);
     core.position.y = 0.86;
     g.add(shaft, head, core);
-  } else if (heroId === 'elara') {
-    // Arcane Runic Compass Staff with glowing cyan-emerald crystal core!
+  } else if (weaponType === 'staff') {
+    // Arcane Runic Staff with glowing crystal core
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.032, 1.32, 7), darkMat);
     shaft.position.y = 0.42;
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.028, 6, 16), steelMat);
@@ -250,8 +299,8 @@ function createHeroHandWeapon(THREE, heroId, accentHex, isOffhand = false) {
     const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.11, 0), glowMat);
     crystal.position.y = 1.12;
     g.add(shaft, ring, crystal);
-  } else if (heroId === 'nyx') {
-    // Curved Twin Shadow Fang Dagger (dual-wielded!)
+  } else if (weaponType === 'daggers') {
+    // Dual-Wield Curved Phantom Daggers (Nyx & Rumbidzai)
     const hilt = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.2, 6), darkMat);
     const blade = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.58, 4), steelMat);
     blade.position.set(isOffhand ? -0.04 : 0.04, 0.36, 0);
@@ -260,6 +309,23 @@ function createHeroHandWeapon(THREE, heroId, accentHex, isOffhand = false) {
     edge.position.set(isOffhand ? -0.055 : 0.055, 0.37, 0.01);
     edge.rotation.z = isOffhand ? 0.24 : -0.24;
     g.add(hilt, blade, edge);
+  } else if (weaponType === 'datapad' || weaponType === 'grimoire') {
+    // Holographic Tech Emitter / Runic Spellbook with glowing pulse plate
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.34, 0.06), darkMat);
+    frame.position.y = 0.24;
+    const screen = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.28, 0.075), glowMat);
+    screen.position.y = 0.24;
+    const halo = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.022, 6, 14), glowMat);
+    halo.position.set(0, 0.28, -0.08);
+    g.add(frame, screen, halo);
+  } else if (weaponType === 'threads') {
+    // Luminous Medic Healing Thread Spindles
+    const ring1 = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.024, 6, 16), glowMat);
+    ring1.position.y = 0.22;
+    const ring2 = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.018, 6, 16), glowMat);
+    ring2.position.y = 0.36;
+    ring2.rotation.x = Math.PI * 0.35;
+    g.add(ring1, ring2);
   } else {
     // Miller Redwolf & Default: Blazing Umbral Void Longsword!
     const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.24, 6), darkMat);
@@ -316,11 +382,15 @@ function createArticulatedImageRunnerRig(THREE, charData, skin, isGhost) {
   root.add(bodyPivot);
 
   const accent = skin && skin.id !== 'default' ? skin.accent : charData.accentColor;
-  const tintColor = isGhost ? 0xb44fff : (skin && skin.id !== 'default' ? new THREE.Color(0xffffff).lerp(new THREE.Color(skin.accent), 0.22) : 0xffffff);
+  const artOverrideKey = skin?.charArtOverride?.[charData.id] || null;
+  const resolvedArt = artOverrideKey ? resolveCharacterArt(charData.id, true, artOverrideKey) : charData;
+  const activeSprites = resolvedArt.sprites || charData.sprites;
+  const rigKey = artOverrideKey || charData.id;
+  const tintColor = isGhost ? 0xb44fff : (skin && skin.id !== 'default' && !artOverrideKey ? new THREE.Color(0xffffff).lerp(new THREE.Color(skin.accent), 0.22) : 0xffffff);
 
-  const texFront = loadSpriteTexture(THREE, charData.sprites.front);
-  const texSide = loadSpriteTexture(THREE, charData.sprites.side);
-  const texBack = loadSpriteTexture(THREE, charData.sprites.back);
+  const texFront = loadSpriteTexture(THREE, activeSprites.front);
+  const texSide = loadSpriteTexture(THREE, activeSprites.side);
+  const texBack = loadSpriteTexture(THREE, activeSprites.back);
 
   const makeSpriteMat = (tex) =>
     new THREE.MeshBasicMaterial({
@@ -335,7 +405,7 @@ function createArticulatedImageRunnerRig(THREE, charData, skin, isGhost) {
 
   const H = 2.05; // Runner visual height in meters
   const W = 2.05;
-  const layout = HERO_RIG_LAYOUT[charData.id] || HERO_RIG_LAYOUT.miller;
+  const layout = HERO_RIG_LAYOUT[rigKey] || HERO_RIG_LAYOUT.standard_sheet;
 
   // Helper: convert normalized top-down image coords (px, py) to character-local (x, y)
   const toWorld = (px, py) => [(px - 0.5) * W, (1.0 - py) * H];
@@ -411,16 +481,39 @@ function createArticulatedImageRunnerRig(THREE, charData, skin, isGhost) {
   lShoulderPivot.add(lElbowPivot);
   lElbowPivot.add(makePartMesh(partMats.leftForearm, layout.lElbow[0], layout.lElbow[1], 0, 0.032));
 
-  // Optional Left-Hand Weapon (Dual-wield Twin Fang for Nyx Aderyn!)
+  // Optional Left-Hand Weapon (Dual-wield for dagger characters: Nyx & Rumbidzai) + Forearm Aegis Shield & Left Mage Orb!
+  const weaponType = charData.weaponType || 'sword';
   const lHandMount = new THREE.Group();
   lHandMount.position.set(-0.22, -0.24, -0.06);
   lElbowPivot.add(lHandMount);
   let lWeaponMesh = null;
-  if (charData.id === 'nyx') {
-    lWeaponMesh = createHeroHandWeapon(THREE, 'nyx', accent, true);
+  if (weaponType === 'daggers') {
+    lWeaponMesh = createHeroHandWeapon(THREE, 'daggers', accent, true);
     lWeaponMesh.rotation.set(-0.8, 0, 0.45);
     lHandMount.add(lWeaponMesh);
   }
+  const aegisShieldMesh = new THREE.Group();
+  const shieldDisc = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.32, 0.32, 0.045, 16),
+    new THREE.MeshStandardMaterial({ color: 0x182844, roughness: 0.25, metalness: 0.8, emissive: accent, emissiveIntensity: 0.35 })
+  );
+  shieldDisc.rotation.x = Math.PI / 2;
+  const shieldRim = new THREE.Mesh(
+    new THREE.TorusGeometry(0.32, 0.032, 6, 16),
+    new THREE.MeshBasicMaterial({ color: PALETTE.shardCyan })
+  );
+  aegisShieldMesh.add(shieldDisc, shieldRim);
+  aegisShieldMesh.position.set(-0.12, -0.05, -0.12);
+  aegisShieldMesh.visible = false;
+  lHandMount.add(aegisShieldMesh);
+
+  const lCastOrb = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.11, 1),
+    new THREE.MeshBasicMaterial({ color: 0x4cf3ff, transparent: true, opacity: 0.9 })
+  );
+  lCastOrb.position.set(-0.08, -0.14, -0.1);
+  lCastOrb.visible = false;
+  lHandMount.add(lCastOrb);
 
   // RIGHT ARM: SHOULDER -> ELBOW/FOREARM/HAND (child of Torso)
   const rShoulderPivot = new THREE.Group();
@@ -433,13 +526,56 @@ function createArticulatedImageRunnerRig(THREE, charData, skin, isGhost) {
   rShoulderPivot.add(rElbowPivot);
   rElbowPivot.add(makePartMesh(partMats.rightForearm, layout.rElbow[0], layout.rElbow[1], 0, 0.032));
 
-  // Right-Hand Signature 3D Hero Weapon (Miller Void Sword, Brann Warhammer, Elara Staff, Nyx Fang!)
+  // Right-Hand Signature 3D Hero Weapon + Right Mage Spell Orb driven from character data!
   const rHandMount = new THREE.Group();
   rHandMount.position.set(0.22, -0.24, -0.06);
   rElbowPivot.add(rHandMount);
-  const rWeaponMesh = createHeroHandWeapon(THREE, charData.id, accent, false);
+  const rWeaponMesh = createHeroHandWeapon(THREE, weaponType, accent, false);
   rWeaponMesh.rotation.set(-0.85, 0, -0.35);
   rHandMount.add(rWeaponMesh);
+
+  const rCastOrb = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.11, 1),
+    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.9 })
+  );
+  rCastOrb.position.set(0.08, -0.14, -0.1);
+  rCastOrb.visible = false;
+  rHandMount.add(rCastOrb);
+
+  // Overhead Foldable 3D Void Paraglider Canopy + Control Bar (Paraglider-Blueprints.mp4)
+  const gliderMesh = new THREE.Group();
+  gliderMesh.position.set(0, 2.18, 0.05);
+  const canopyMat = new THREE.MeshStandardMaterial({
+    color: 0x0b2545,
+    emissive: accent,
+    emissiveIntensity: 0.55,
+    roughness: 0.3,
+    side: THREE.DoubleSide,
+  });
+  const wingL = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.045, 0.68), canopyMat);
+  wingL.position.set(-0.56, 0.12, 0);
+  wingL.rotation.z = 0.16;
+  wingL.rotation.y = -0.18;
+  const wingR = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.045, 0.68), canopyMat);
+  wingR.position.set(0.56, 0.12, 0);
+  wingR.rotation.z = -0.16;
+  wingR.rotation.y = 0.18;
+  const wingTrim = new THREE.Mesh(
+    new THREE.BoxGeometry(2.36, 0.03, 0.06),
+    new THREE.MeshBasicMaterial({ color: PALETTE.shardCyan })
+  );
+  wingTrim.position.set(0, 0.14, -0.32);
+  const barMat = new THREE.MeshBasicMaterial({ color: 0xc8e6ff });
+  const ctrlBar = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.92, 6), barMat);
+  ctrlBar.rotation.z = Math.PI / 2;
+  ctrlBar.position.set(0, -0.28, -0.05);
+  const strutL = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.46, 6), barMat);
+  strutL.position.set(-0.42, -0.06, -0.02);
+  const strutR = strutL.clone();
+  strutR.position.x = 0.42;
+  gliderMesh.add(wingL, wingR, wingTrim, ctrlBar, strutL, strutR);
+  gliderMesh.visible = false;
+  bodyPivot.add(gliderMesh);
 
   // LEFT LEG: HIP -> THIGH -> KNEE/SHIN/3D BOOT SOLE (child of Hips)
   const bootMat = new THREE.MeshStandardMaterial({ color: 0x261d1c, roughness: 0.75, metalness: 0.2 });
@@ -522,7 +658,9 @@ function createArticulatedImageRunnerRig(THREE, charData, skin, isGhost) {
   frontPlane.visible = false;
   bodyPivot.add(frontPlane);
 
-  // 4) Soft glowing shadow + neon ground ring beneath boots
+  // 4) Grounded soft contact shadow + neon ring beneath boots (scales smoothly with jump height!)
+  const shadowBlob = createContactShadow(THREE, 0.62, 0.65);
+  root.add(shadowBlob);
   const footRing = new THREE.Mesh(
     new THREE.RingGeometry(0.34, 0.5, 22),
     new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.72, side: THREE.DoubleSide })
@@ -575,6 +713,10 @@ function createArticulatedImageRunnerRig(THREE, charData, skin, isGhost) {
     rKneePivot,
     rWeaponMesh,
     lWeaponMesh,
+    aegisShieldMesh,
+    lCastOrb,
+    rCastOrb,
+    gliderMesh,
     slashArcMesh,
     slashArcMat,
     castRingMesh,
@@ -582,6 +724,7 @@ function createArticulatedImageRunnerRig(THREE, charData, skin, isGhost) {
     frontPlane,
     spriteMats,
     footRing,
+    shadowBlob,
     shieldMesh,
     orbGroup,
     matBody: matBack,
@@ -590,7 +733,7 @@ function createArticulatedImageRunnerRig(THREE, charData, skin, isGhost) {
   };
 
   // Trigger clean offscreen canvas limb slicing & bind each skeletal texture (works both sync-cached & async!)
-  getSkeletalParts(THREE, charData, (partsData) => {
+  getSkeletalParts(THREE, rigKey, activeSprites.back, (partsData) => {
     for (const pn of partNames) {
       partMats[pn].map = partsData.textures[pn];
       partMats[pn].visible = true;
@@ -1919,6 +2062,7 @@ export function createChaserMesh(THREE, chaserId) {
     scale: 1.78,
     dirZ: -1, // Pursuing forward toward -Z!
   });
+  group.add(createContactShadow(THREE, 1.45, 0.68));
   group.add(built.body);
   group.userData = { creature: built.parts, body: built.body, data };
   return group;
@@ -2011,6 +2155,9 @@ export function createBonusRingMesh(THREE) {
 export function createObstacleMesh(THREE, type, world, isIllusion = false) {
   const g = new THREE.Group();
   const opacity = isIllusion ? 0.52 : 1.0;
+  if (type !== 'hazard_floor' && type !== 'sonic_low' && type !== 'sonic_high') {
+    g.add(createContactShadow(THREE, 0.72, isIllusion ? 0.22 : 0.54));
+  }
 
   if (type === 'ground') {
     // High-contrast glowing warm hurdle (instant "JUMP!" readability)
@@ -2114,6 +2261,81 @@ export function createObstacleMesh(THREE, type, world, isIllusion = false) {
     );
     wave.position.y = type === 'sonic_low' ? 0.44 : 1.5;
     g.add(wave);
+  } else if (type === 'launch_ramp') {
+    // Glowing Acrobatic Launch Ramp (Flips-and-Tricks / Paraglider takeoff pad!)
+    const rampMat = new THREE.MeshStandardMaterial({
+      color: 0x16384c,
+      emissive: 0x00e5ff,
+      emissiveIntensity: 0.72,
+      roughness: 0.28,
+    });
+    const wedge = new THREE.Mesh(new THREE.BoxGeometry(1.06, 0.24, 1.85), rampMat);
+    wedge.position.set(0, 0.34, 0);
+    wedge.rotation.x = 0.32;
+    const chev = new THREE.Mesh(
+      new THREE.BoxGeometry(0.92, 0.06, 1.6),
+      new THREE.MeshBasicMaterial({ color: 0xffd84d })
+    );
+    chev.position.set(0, 0.46, 0);
+    chev.rotation.x = 0.32;
+    g.add(wedge, chev);
+  } else if (type === 'wall_panel') {
+    // Flanking Vertical Wall-Run Energy Panel (Dynamic-Wall-Run-Blueprints.mp4)
+    const wallMat = new THREE.MeshStandardMaterial({
+      color: 0x122642,
+      emissive: world.accent || 0x00e5ff,
+      emissiveIntensity: 0.58,
+      roughness: 0.3,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.45, 6.2), wallMat);
+    panel.position.y = 1.28;
+    const railTop = new THREE.Mesh(
+      new THREE.BoxGeometry(0.24, 0.1, 6.3),
+      new THREE.MeshBasicMaterial({ color: 0x4cf3ff })
+    );
+    railTop.position.y = 2.48;
+    const railMid = new THREE.Mesh(
+      new THREE.BoxGeometry(0.22, 0.08, 6.2),
+      new THREE.MeshBasicMaterial({ color: 0xffd84d })
+    );
+    railMid.position.y = 1.25;
+    g.add(panel, railTop, railMid);
+  } else if (type === 'climb_wall') {
+    // Stepped Vertical Ascent Wall with Glowing Climb Rungs (Climbing-Animation-Set.mp4)
+    const cliffMat = new THREE.MeshStandardMaterial({
+      color: 0x241d38,
+      emissive: 0x6b2fa0,
+      emissiveIntensity: 0.42,
+      roughness: 0.5,
+    });
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.45, 0.95), cliffMat);
+    wall.position.y = 1.22;
+    g.add(wall);
+    const rungMat = new THREE.MeshBasicMaterial({ color: 0x3dff7a });
+    for (let r = 0; r < 4; r++) {
+      const rung = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.09, 0.12), rungMat);
+      rung.position.set(0, 0.52 + r * 0.52, 0.5);
+      g.add(rung);
+    }
+  } else if (type === 'updraft_column') {
+    // Swirling Cyan Updraft Wind Column (Paraglider-Blueprints.mp4)
+    const windMat = new THREE.MeshBasicMaterial({
+      color: 0x4cf3ff,
+      transparent: true,
+      opacity: 0.38,
+      side: THREE.DoubleSide,
+    });
+    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.52, 3.4, 14, 1, true), windMat);
+    cyl.position.y = 1.7;
+    const baseRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.42, 0.62, 18),
+      new THREE.MeshBasicMaterial({ color: 0x88ffff, side: THREE.DoubleSide })
+    );
+    baseRing.rotation.x = -Math.PI / 2;
+    baseRing.position.y = 0.06;
+    g.add(cyl, baseRing);
   }
 
   return g;
@@ -2205,7 +2427,8 @@ export function createPortalEnemyMesh(THREE, worldId = 1) {
   });
   g.add(built.body);
 
-  // Pulsing ground threat ring beneath creature
+  // Pulsing ground threat ring + grounded contact shadow beneath creature
+  g.add(createContactShadow(THREE, 0.78, 0.62));
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.52, 0.68, 18),
     new THREE.MeshBasicMaterial({ color: spec.eyeColor, side: THREE.DoubleSide, transparent: true, opacity: 0.8 })

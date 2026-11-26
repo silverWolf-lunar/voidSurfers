@@ -1,6 +1,22 @@
 // MILLER: VOID RUN — Arcade-Upgraded Game Design Data
-// Preserves all 7 Portal Worlds, 7 Chasers, 7 Bosses, 15 Void Powers, 7 Characters & 5-Act Story
+// Preserves all 7 Portal Worlds, 7 Chasers, 7 Bosses, 15 Void Powers, Data-Driven Characters & 5-Act Story
 // Adds: 16 Skill Achievements, 6 Unlockable Void Trails, 4 Impact Aura FX, Colour Variants & Kid-Safe Rewards
+
+import {
+  CHARACTER_DEFINITIONS,
+  PLAYER_SLOT_DEFINITIONS,
+  DEFAULT_UNLOCKED_CHAR_IDS,
+  resolveCharacterArt,
+  getCharacterById,
+} from './charactersConfig.js';
+
+export {
+  CHARACTER_DEFINITIONS,
+  PLAYER_SLOT_DEFINITIONS,
+  DEFAULT_UNLOCKED_CHAR_IDS,
+  resolveCharacterArt,
+  getCharacterById,
+};
 
 export const PALETTE = {
   voidBlack: 0x0a0a14,
@@ -362,114 +378,8 @@ export const ABILITY_UPGRADE_COSTS = [
   { vs: 1200, sp: 2 },
 ];
 
-export const CHARACTERS = [
-  {
-    id: 'miller',
-    name: 'Miller Redwolf',
-    initials: 'MR',
-    title: 'F-Rank Hunter · Codex Bearer',
-    passiveName: 'Codex Bearer',
-    passiveDesc: '+10% bonus Codex XP from all sources.',
-    sigName: 'All 15 Void Powers',
-    sigDesc: 'Full access to the entire Umbral Codex ability tree.',
-    costVS: 0,
-    costBC: 0,
-    reqLv: 1,
-    primaryColor: 0x422f24,
-    accentColor: 0xb44fff,
-    style: 'miller',
-    featured: true,
-    portrait: 'assets/art/characters/miller_portrait.jpg',
-    splash: 'assets/art/characters/miller_splash.jpg',
-    refSheet: 'assets/art/characters/miller_ref.jpg',
-    sprites: {
-      front: 'assets/art/characters/sprites/miller_front.png',
-      side: 'assets/art/characters/sprites/miller_side.png',
-      back: 'assets/art/characters/sprites/miller_back.png',
-    },
-  },
-  {
-    id: 'brann',
-    name: 'Brann Kest',
-    initials: 'BK',
-    title: 'Iron Vanguard · Shieldbearer',
-    passiveName: 'Aegis Guard',
-    passiveDesc: 'Starts every run with +1 free Shield Charge that deflects a hit & pushes the chaser back 12m.',
-    sigName: 'Hammer Shockwave',
-    sigDesc: 'Slams forged warhammer to shatter obstacles 24m ahead & blast chaser back 18m. (28 VE, 14s CD)',
-    costVS: 0,
-    costBC: 0,
-    reqLv: 1,
-    primaryColor: 0x7a261e,
-    accentColor: 0xffb020,
-    style: 'vanguard',
-    featured: true,
-    portrait: 'assets/art/characters/brann_portrait.jpg',
-    splash: 'assets/art/characters/brann_splash.jpg',
-    refSheet: 'assets/art/characters/brann_ref.jpg',
-    sprites: {
-      front: 'assets/art/characters/sprites/brann_front.png',
-      side: 'assets/art/characters/sprites/brann_side.png',
-      back: 'assets/art/characters/sprites/brann_back.png',
-    },
-  },
-  {
-    id: 'elara',
-    name: 'Elara Vey',
-    initials: 'EV',
-    title: 'Arcane Runeweaver · Portal Scholar',
-    passiveName: 'Arcane Resonance',
-    passiveDesc: '+30% faster Void Energy regen & +40% bonus score from Golden Rings & Codex Essence.',
-    sigName: 'Runic Ward Circle',
-    sigDesc: 'Projects a cyan-gold rune circle for 6s that vaporizes lane obstacles & pulls shards. (26 VE, 14s CD)',
-    costVS: 0,
-    costBC: 0,
-    reqLv: 1,
-    primaryColor: 0x22384c,
-    accentColor: 0x3dffcc,
-    style: 'arcane',
-    featured: true,
-    portrait: 'assets/art/characters/elara_portrait.jpg',
-    splash: 'assets/art/characters/elara_splash.jpg',
-    refSheet: 'assets/art/characters/elara_ref.jpg',
-    sprites: {
-      front: 'assets/art/characters/sprites/elara_front.png',
-      side: 'assets/art/characters/sprites/elara_side.png',
-      back: 'assets/art/characters/sprites/elara_back.png',
-    },
-  },
-  {
-    id: 'nyx',
-    name: 'Nyx Aderyn',
-    initials: 'NA',
-    title: 'Shadow Rogue · Twin-Fang Phantom',
-    passiveName: 'Shadow Dash',
-    passiveDesc: '35% faster lane switches, auto-phases 1st obstacle & extends Near-Miss Combos +0.8s.',
-    sigName: 'Twin-Fang Blitz',
-    sigDesc: 'Phases through all obstacles for 2.5s while slicing nearby hazards into Void Shards! (28 VE, 12s CD)',
-    costVS: 0,
-    costBC: 0,
-    reqLv: 1,
-    primaryColor: 0x1d1a26,
-    accentColor: 0xa052ff,
-    style: 'rogue',
-    featured: true,
-    portrait: 'assets/art/characters/nyx_portrait.jpg',
-    splash: 'assets/art/characters/nyx_splash.jpg',
-    refSheet: 'assets/art/characters/nyx_ref.jpg',
-    sprites: {
-      front: 'assets/art/characters/sprites/nyx_front.png',
-      side: 'assets/art/characters/sprites/nyx_side.png',
-      back: 'assets/art/characters/sprites/nyx_back.png',
-    },
-  },
-  { id: 'leonard', name: 'Leonard Meleak', initials: 'LM', title: 'C-Rank Hunter · Power Mimicry', passiveName: 'Power Echo', passiveDesc: 'First Void Power cooldown reduced by 50% echoing Miller.', sigName: 'Mimicry Surge', sigDesc: 'Re-activates last collected power-up (or random) for 3.5s. (25 VE, 20s CD)', costVS: 1500, costBC: 3, reqLv: 10, primaryColor: 0x2a2f3d, accentColor: 0x00e5ff, style: 'tech' },
-  { id: 'precious', name: 'Precious Trisky', initials: 'PT', title: 'Military Medic · Thread Manipulation', passiveName: "Healer's Thread", passiveDesc: '30% faster stumble recovery & +25% passive VE regen.', sigName: 'Thread Mend', sigDesc: 'Clears stumble + 2s immunity, or +50% VE regen aura for 5s. (20 VE, 15s CD)', costVS: 2500, costBC: 4, reqLv: 15, primaryColor: 0xe6eaf2, accentColor: 0x44ff88, style: 'medic' },
-  { id: 'rumbidzai', name: 'Rumbidzai Mash', initials: 'RM', title: 'The Phantom Blade · Elytra Leader', passiveName: 'Phantom Step', passiveDesc: '30% faster lane changes & auto-phases the first obstacle each run.', sigName: 'Blade Phase', sigDesc: 'Summons phantom blades destroying 3 nearest obstacles + 1s phase. (30 VE, 12s CD)', costVS: 3000, costBC: 5, reqLv: 20, primaryColor: 0x151320, accentColor: 0xff38a8, style: 'assassin' },
-  { id: 'harry', name: 'Harry Koera', initials: 'HK', title: 'Military Detective · Ritual Magic', passiveName: "Detective's Instinct", passiveDesc: '+25% rare drop chance (Cores/Fragments) & always reveals hidden paths.', sigName: 'Ritual Ward', sigDesc: 'Places an 8s ritual lane ward that destroys all obstacles in your lane. (35 VE, 22s CD)', costVS: 4000, costBC: 7, reqLv: 30, primaryColor: 0x3b2d22, accentColor: 0xffb020, style: 'detective' },
-  { id: 'garfield', name: 'Garfield Thorn', initials: 'GT', title: 'Young Sentinel · Energy Conversion', passiveName: 'Energy Convert', passiveDesc: 'Every obstacle destroyed by any power converts into +3 Void Shards.', sigName: 'Duplicate Burst', sigDesc: 'Duplicates active/last power-up or doubles nearby shards. (30 VE, 25s CD)', costVS: 6000, costBC: 10, reqLv: 45, primaryColor: 0x264432, accentColor: 0xffee44, style: 'scout' },
-  { id: 'ruth', name: 'Ruth Swait', initials: 'RS', title: 'Guild Architect · Cryokinesis', passiveName: 'Frost Architect', passiveDesc: 'Overhead obstacles automatically shatter on contact with zero stumble.', sigName: 'Cryo Path', sigDesc: 'Freezes track for 4s — smash through brittle ice obstacles for +2 VS each. (40 VE, 20s CD)', costVS: 8000, costBC: 15, reqLv: 60, primaryColor: 0x203b54, accentColor: 0x5ce8e4, style: 'frost' },
-];
+// Data-driven playable character roster sourced from editable charactersConfig.js
+export const CHARACTERS = CHARACTER_DEFINITIONS;
 
 export const SKILL_TREE = [
   { id: 'void_dur', path: 'Void Path', name: 'Power Duration +0.5s', costSP: 3, desc: 'All active Void Powers last +0.5s longer.' },
@@ -494,6 +404,7 @@ export const CONSUMABLES = [
 // All Skins, Trails & Aura FX are 100% earned through gameplay & skill (Zero Pay-to-Win!)
 export const SKINS = [
   { id: 'default', name: 'F-Rank Void Standard', tier: 'Starter', costVS: 0, primary: 0x1c182c, accent: 0xb44fff, hex: '#B44FFF' },
+  { id: 'void_wolf_mask', name: 'Void-Wolf Mask (Miller Art)', tier: 'Signature', costVS: 0, primary: 0x181320, accent: 0xb44fff, hex: '#C066FF', charArtOverride: { miller: 'miller_wolf' } },
   { id: 'verdant_cloak', name: 'Verdant Neon Scout', tier: 'Common', costVS: 400, primary: 0x133824, accent: 0x3dff7a, hex: '#3DFF7A' },
   { id: 'cyber_cyan', name: 'Pulse Arc Runner', tier: 'Common', costVS: 650, primary: 0x12263e, accent: 0x00e5ff, hex: '#00E5FF' },
   { id: 'ember_walker', name: 'Ember Solar Walker', tier: 'Rare', costVS: 1400, primary: 0x3f150a, accent: 0xff7a28, hex: '#FF7A28' },
@@ -595,7 +506,7 @@ export const ACHIEVEMENTS = [
   { id: 'ach_bonus_ring', icon: '🎯', tier: 'Bronze', title: 'Secret Seeker', desc: 'Fly through a Golden Bonus Rift Ring.', rewardVS: 180, rewardXP: 80, check: (d) => d.totalBonusRings >= 1 },
   { id: 'ach_powers_20', icon: '✨', tier: 'Silver', title: 'Codex Weaver', desc: 'Activate Void Powers 20 times.', rewardVS: 250, rewardXP: 100, check: (d) => d.totalPowersUsed >= 20 },
   { id: 'ach_codex_10', icon: '📖', tier: 'Gold', title: 'The Embrace', desc: 'Reach Umbral Codex Level 10.', rewardVS: 400, rewardXP: 160, check: (d) => d.codexLevel >= 10 },
-  { id: 'ach_customise', icon: '🎨', tier: 'Bronze', title: 'Signature Style', desc: 'Unlock a new Skin, Trail, Aura, or Runner.', rewardVS: 150, rewardXP: 60, check: (d) => (d.unlockedSkins.length + d.unlockedTrails.length + d.unlockedAuras.length + d.unlockedChars.length) > 4 },
+  { id: 'ach_customise', icon: '🎨', tier: 'Bronze', title: 'Signature Style', desc: 'Unlock a new Skin, Trail, Aura, or Runner.', rewardVS: 150, rewardXP: 60, check: (d) => (d.unlockedSkins.length + d.unlockedTrails.length + d.unlockedAuras.length + d.unlockedChars.length) > (DEFAULT_UNLOCKED_CHAR_IDS.length + 4) },
 ];
 
 export const CODEX_MILESTONES = [

@@ -1,0 +1,62 @@
+{
+  "version": "1.0.0",
+  "sourceFolder": "SharedArt/motions",
+  "note": "Reference-derived biomechanical phase timings and aligned in-game set-piece scene definitions for MILLER: VOID RUN.",
+  "motions": [
+    {
+      "id": "locomotion",
+      "sourceVideo": "YTDown.com_YouTube_Media_PsYYDN6tTAQ_Dynamic-Locomotion-animations-for-UE4_001_1080p.mp4",
+      "states": ["accel_lean", "steady_sprint", "decel_brake", "lane_pivot"],
+      "alignedSceneId": "scene_sprint_gauntlet"
+    },
+    {
+      "id": "roll",
+      "sourceVideo": "YTDown.com_YouTube_Media_xqFnBhpoyw0_Rolls-and-Dodges-Animation-set-for-UE4_001_1080p.mp4",
+      "states": ["roll", "dodge_roll"],
+      "durationSec": 0.52,
+      "alignedSceneId": "scene_roll_corridor"
+    },
+    {
+      "id": "flip",
+      "sourceVideo": "YTDown.com_YouTube_Media_UxxcXMbZfFM_Flips-and-Tricks-Animation-Set-for-UE4_001_1080p.mp4",
+      "states": ["front_flip", "back_flip", "side_aerial"],
+      "durationSec": 0.62,
+      "alignedSceneId": "scene_trick_canyon"
+    },
+    {
+      "id": "wall_run",
+      "sourceVideo": "YTDown.com_YouTube_Media_sJUMDcvUsNY_Dynamic-Wall-Run-Blueprints-and-Animations-for-UE4_001_1080p.mp4",
+      "states": ["wall_run_left", "wall_run_right", "wall_jump"],
+      "durationSec": 1.15,
+      "alignedSceneId": "scene_wall_run_alley"
+    },
+    {
+      "id": "climb",
+      "sourceVideo": "YTDown.com_YouTube_Media_kYeV-AK24jE_Climbing-Animation-Set-for-UE4_001_1080p.mp4",
+      "states": ["climb_ascend", "climb_mantle"],
+      "durationSec": 0.82,
+      "alignedSceneId": "scene_obsidian_ascent"
+    },
+    {
+      "id": "paraglider",
+      "sourceVideo": "YTDown.com_YouTube_Media_uq1axwa3Das_Paraglider-Blueprints-and-Animations-for-UE4_001_1080p.mp4",
+      "states": ["paraglider_glide", "updraft_rise"],
+      "durationSec": 2.8,
+      "alignedSceneId": "scene_rift_updraft"
+    },
+    {
+      "id": "mage_cast",
+      "sourceVideo": "YTDown.com_YouTube_Media_15pr8o-GAVk_Mage-Animation-Set-for-UE4_001_1080p.mp4",
+      "states": ["mage_cast", "mage_channel"],
+      "durationSec": 0.54,
+      "alignedSceneId": "scene_arcane_barrage"
+    },
+    {
+      "id": "sword_shield",
+      "sourceVideo": "YTDown.com_YouTube_Media_sU7jk2OQlgc_First-Person-Sword-and-Shield-animations-for-UE4_001_1080p.mp4",
+      "states": ["combo_slash_1", "combo_cleave_2", "combo_thrust_3", "shield_block", "shield_bash"],
+      "durationSec": 0.52,
+      "alignedSceneId": "scene_vanguard_duel"
+    }
+  ]
+}
